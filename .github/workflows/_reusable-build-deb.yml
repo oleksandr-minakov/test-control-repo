@@ -70,14 +70,12 @@ jobs:
             bash -c '${{ inputs.entrypoint }}'
           ls -la src/_output/local/bin/linux/amd64/
 
-      - name: Install nfpm
+      - name: Install nfpm (from goreleaser's apt repo)
         run: |
           set -e
-          source ./toolchains/tool-pins.env
-          NFPM_VER="${NFPM_VERSION#v}"
-          curl -fsSL -o /tmp/nfpm.tar.gz \
-            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VER}/nfpm_${NFPM_VER}_Linux_x86_64.tar.gz"
-          tar -xzf /tmp/nfpm.tar.gz -C /usr/local/bin nfpm
+          echo 'deb [trusted=yes] https://repo.goreleaser.com/apt/ /' | sudo tee /etc/apt/sources.list.d/goreleaser.list
+          sudo apt-get update -y >/dev/null 2>&1
+          sudo apt-get install -y nfpm
           nfpm --version
 
       - name: Render nfpm config
