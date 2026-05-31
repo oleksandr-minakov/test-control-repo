@@ -34,14 +34,20 @@ We **never** merge `upstream/*` into the LTS branch. The LTS branch receives
 **cherry-picks** from upstream onto a fresh `backport/<CVE>/...` branch, which
 then opens a PR against the LTS branch.
 
-## Backport workflow
+## Backport workflow (v3)
 
 1. Triage decides applicability (§2 step 4–5). One Issue per CVE×component.
 2. Engineer creates `backport/<CVE>/lts-k8s-1.32-kubernetes-1.32` from
    `lts/k8s-1.32/kubernetes-1.32`.
 3. Cherry-pick upstream fix(es). If non-clean, record the strategy
    (`reimplemented` | `partial` | `dropped`) in the PR description.
-4. PR runs source-native tests + per-component checks.
-5. Tier-1 non-clean → **two-person review** (CODEOWNERS-enforced).
-6. Merge. Add a commit trailer `LTS-Patch: CVE-XXXX-YYYY`; the patch-manifest
+4. **PR runs `lts-tests.yml` on the fork** — upstream unit tests for each
+   component + a six-binary compile-check. This is the canonical validation
+   of the patch (v3 §9 layer 1). Tier-1 non-clean → **two-person review**
+   (CODEOWNERS-enforced).
+5. Merge. Add a commit trailer `LTS-Patch: CVE-XXXX-YYYY`; the patch-manifest
    generator (`scripts/render-patch-manifest.sh`) consumes it.
+6. The build repo's `component-<X>.yml` then runs hermetic build +
+   artifact-level validation (v3 §9 layer 2). Its gate checks that
+   `lts-tests` on the fork was green at the merged commit; if not, the
+   release is blocked.

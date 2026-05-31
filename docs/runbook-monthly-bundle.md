@@ -13,6 +13,8 @@ timings are relative to T-0 = GA promotion.
 
 ## T-7d — Candidate builds green
 
+- [ ] `lts-tests.yml` on the fork is green at the head of
+      `lts/k8s-1.32/kubernetes-1.32` (v3 §9 source-layer gate).
 - [ ] Each of the six `component-*` workflows has a green run on the head
       of `lts/k8s-1.32/kubernetes-1.32`.
 - [ ] SBOM, signatures, attestations, patch manifest, release metadata

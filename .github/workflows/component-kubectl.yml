@@ -76,8 +76,18 @@ jobs:
       component:    kubectl
     secrets: inherit
 
+  artifact-smoke:
+    needs: [load-descriptor, build]
+    uses: ./.github/workflows/_reusable-artifact-smoke.yml
+    with:
+      target_kind:  deb
+      target_ref:   deb-kubectl
+      deb_filename: ${{ needs.build.outputs.deb_name }}
+      component:    kubectl
+    secrets: inherit
+
   evidence:
-    needs: [load-descriptor, build, sbom, scan]
+    needs: [load-descriptor, build, sbom, scan, artifact-smoke]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -85,6 +95,14 @@ jobs:
         with: { name: sbom-kubectl, path: sbom/ }
       - uses: actions/download-artifact@v4
         with: { name: findings-kubectl, path: scans/ }
+      - name: Fetch source-fork test status (v3 §9)
+        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
+        run: |
+          mkdir -p evidence
+          ./scripts/fetch-source-tests.sh \
+            --fork "${{ needs.load-descriptor.outputs.fork_repo }}" \
+            --branch "${{ needs.load-descriptor.outputs.lts_branch }}" \
+            --out evidence/source-tests.json
       - name: Render patch manifest + release metadata
         env:
           UPSTREAM_TAG: ${{ needs.load-descriptor.outputs.upstream_tag }}
@@ -95,7 +113,6 @@ jobs:
           TARGET_REF:   ${{ needs.build.outputs.deb_name }}
           DEB_VERSION:  ${{ needs.build.outputs.deb_version }}
         run: |
-          mkdir -p evidence
           ./scripts/render-patch-manifest.sh kubectl \
             "${UPSTREAM_TAG}" "${LTS_BUILD}" "${DEB_VERSION}" \
             > evidence/patch-manifest.yaml
@@ -114,7 +131,7 @@ jobs:
     secrets: inherit
 
   gate:
-    needs: [load-descriptor, sign]
+    needs: [load-descriptor, sign, artifact-smoke]
     uses: ./.github/workflows/_reusable-policy-gate.yml
     with:
       component: kubectl

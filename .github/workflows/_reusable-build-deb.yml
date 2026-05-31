@@ -1,8 +1,7 @@
 name: _reusable-build-deb
-# Hermetic-ish build of one k8s-core binary -> .deb (kubelet | kubectl).
-# Test-repo simplification: instead of pushing to a signed deb repo, the .deb
-# is uploaded as a workflow artifact (deb-<component>). The signed-blob via
-# cosign keyless still happens in the sign reusable.
+# Build one k8s-core Go binary -> .deb (kubelet | kubectl).
+# Deb is uploaded as a workflow artifact (deb-<component>) in lieu of a real
+# deb repo for the test setup.
 on:
   workflow_call:
     inputs:
@@ -43,6 +42,16 @@ jobs:
           path: src
           fetch-depth: 1
 
+      - name: Derive Go version from descriptor toolchain image
+        id: gover
+        run: |
+          tag="${{ inputs.toolchain_image }}"
+          ver="${tag##*:}"; ver="${ver%-*}"
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v5
+        with: { go-version: '${{ steps.gover.outputs.version }}', cache: false }
+
       - name: Render deb version
         id: ver
         run: |
@@ -55,20 +64,17 @@ jobs:
                        /opt/hostedtoolcache/CodeQL || true
           df -h /
 
-      - name: Pull pinned toolchain image
-        run: docker pull "${{ inputs.toolchain_image }}"
-
       - name: Hermetic build (binary)
+        working-directory: src
+        env:
+          GOFLAGS: -mod=vendor -trimpath -buildvcs=false
+          GOPROXY: off
+          GOSUMDB: off
+          CGO_ENABLED: "0"
         run: |
-          docker run --rm --network=none \
-            -v "${PWD}/src:/src" -w /src \
-            -e GOFLAGS="-mod=vendor -trimpath -buildvcs=false" \
-            -e GOSUMDB=off \
-            -e GOPROXY=off \
-            -e CGO_ENABLED=0 \
-            "${{ inputs.toolchain_image }}" \
-            bash -c '${{ inputs.entrypoint }}'
-          ls -la src/_output/local/bin/linux/amd64/
+          set -ex
+          ${{ inputs.entrypoint }}
+          ls -la _output/local/bin/linux/amd64/
 
       - name: Install nfpm (from goreleaser's apt repo)
         run: |
@@ -88,16 +94,12 @@ jobs:
             --upstream-tag "${{ inputs.upstream_tag }}" \
             --bundle "${{ inputs.bundle }}" \
             > nfpm.yaml
+          cat nfpm.yaml
 
       - name: Stage kubelet packaging files
         if: inputs.component == 'kubelet'
-        # Pre-baked packaging files for the kubelet deb. Production would track
-        # upstream's pkgs.k8s.io packaging directly.
         run: |
           set -ex
-          # The src/_output/ tree was written by Docker as root; reclaim the
-          # whole src tree as the runner user so we can create sibling dirs.
-          sudo chown -R "$USER":"$USER" src || true
           mkdir -p src/packaging
 
           cat > src/packaging/kubelet.service <<'UNIT'
@@ -128,7 +130,6 @@ jobs:
           KCONF
 
           # Strip the leading 10-space indent that comes from the YAML pipe-literal.
-          # (cat <<'TERM' preserves indentation; systemd parsing is whitespace-sensitive.)
           sed -i 's/^          //' src/packaging/kubelet.service src/packaging/10-kubeadm.conf
 
           printf '#!/bin/sh\nset -e\nsystemctl daemon-reload || true\n' > src/packaging/kubelet.postinst
@@ -141,7 +142,6 @@ jobs:
         id: pack
         run: |
           set -ex
-          sudo chown -R "$USER":"$USER" src || true
           mkdir -p dist
           nfpm package -f nfpm.yaml -p deb -t dist/
           DEB=$(ls dist/${{ inputs.package_name }}_*.deb | head -n1)
@@ -150,7 +150,6 @@ jobs:
 
       - name: Deb sanity (dpkg -I + lintian)
         run: |
-          sudo apt-get update -y >/dev/null
           sudo apt-get install -y --no-install-recommends lintian >/dev/null
           dpkg -I "dist/${{ steps.pack.outputs.deb_name }}"
           lintian "dist/${{ steps.pack.outputs.deb_name }}" || echo "(lintian warnings tolerated; errors would have exited)"

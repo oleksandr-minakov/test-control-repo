@@ -1,15 +1,14 @@
 name: _reusable-build-image
-# Hermetic-ish build of one k8s-core Go binary -> OCI image candidate.
+# Build one k8s-core Go binary -> OCI image candidate.
 # Candidates go to ghcr.io/<owner>/lts-k8s/<component>:candidate-<run_id>;
-# canonical/human tags (1.32.13 + 1.32.13-lts<n>) are repointed in the GA
+# canonical/human tags (1.32.13 + 1.32.13-lts1) are repointed in the GA
 # promote job (component-*.yml::promote) only after the policy gate is green.
 #
-# Test repo simplifications vs. the plan (§6):
-#   * Uses ubuntu-latest GHA runners, not the frozen self-hosted pool.
-#   * Builds inside the upstream golang toolchain image (pinned by digest)
-#     with --network=none; modules come from k8s's vendored tree.
-#   * No external module proxy required because kubernetes/kubernetes vendors
-#     its dependencies.
+# Hermeticity (test-repo level): build uses kubernetes/kubernetes's vendored
+# tree with -mod=vendor + GOPROXY=off, so no module is fetched at build time.
+# Setup-go is used directly on the runner (the upstream golang docker image
+# is missing rsync which kube::golang::place_bins requires); the toolchain
+# version still comes from the component descriptor.
 on:
   workflow_call:
     inputs:
@@ -19,13 +18,12 @@ on:
       bundle:           { type: string, required: true }
       fork_repo:        { type: string, required: true }
       lts_branch:       { type: string, required: true }
-      toolchain_image:  { type: string, required: true }
+      toolchain_image:  { type: string, required: true }   # informational; go version derived from it
       base_image:       { type: string, required: true }
       entrypoint:       { type: string, required: true }
       registry_path:    { type: string, required: true }
     outputs:
       image_ref:
-        description: 'Fully-qualified candidate ref incl. digest'
         value: ${{ jobs.build.outputs.image_ref }}
       image_digest:
         value: ${{ jobs.build.outputs.image_digest }}
@@ -38,15 +36,15 @@ on:
 
 permissions:
   contents: read
-  packages: write   # push to ghcr.io
-  id-token: write   # cosign keyless signing in downstream job
+  packages: write
+  id-token: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
     outputs:
-      image_ref:     ${{ steps.publish-candidate.outputs.image_ref }}
-      image_digest:  ${{ steps.publish-candidate.outputs.digest }}
+      image_ref:     ${{ steps.publish.outputs.image_ref }}
+      image_digest:  ${{ steps.publish.outputs.digest }}
       candidate_tag: ${{ steps.tags.outputs.candidate }}
       canonical_tag: ${{ steps.tags.outputs.canonical }}
       human_tag:     ${{ steps.tags.outputs.human }}
@@ -62,6 +60,17 @@ jobs:
           path: src
           fetch-depth: 1
 
+      - name: Derive Go version from descriptor toolchain image
+        id: gover
+        run: |
+          # e.g. docker.io/library/golang:1.23.4-bookworm -> 1.23.4
+          tag="${{ inputs.toolchain_image }}"
+          ver="${tag##*:}"; ver="${ver%-*}"
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v5
+        with: { go-version: '${{ steps.gover.outputs.version }}', cache: false }
+
       - name: Render OCI tags
         id: tags
         run: |
@@ -70,37 +79,29 @@ jobs:
           echo "candidate=candidate-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
 
       - name: Free disk space on runner
-        # k8s vendor tree + Go build cache + image push easily blows past the
-        # default ~14GB ubuntu-latest budget. Reclaim the obvious wins first.
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
                        /opt/hostedtoolcache/CodeQL || true
           df -h /
 
-      - name: Pull pinned toolchain image
-        run: docker pull "${{ inputs.toolchain_image }}"
-
-      - name: Hermetic build (network=none; vendored deps)
+      - name: Hermetic build (vendored deps; GOPROXY=off)
+        working-directory: src
+        env:
+          GOFLAGS: -mod=vendor -trimpath -buildvcs=false
+          GOPROXY: off
+          GOSUMDB: off
+          CGO_ENABLED: "0"
         run: |
-          # kubernetes/kubernetes vendors deps under ./vendor, so no module
-          # download is needed; --network=none enforces that. Login shell
-          # (-l) intentionally avoided — golang's bookworm image relies on
-          # the Dockerfile ENV PATH which login shells override.
-          docker run --rm --network=none \
-            -v "${PWD}/src:/src" -w /src \
-            -e GOFLAGS="-mod=vendor -trimpath -buildvcs=false" \
-            -e GOSUMDB=off \
-            -e GOPROXY=off \
-            -e CGO_ENABLED=0 \
-            "${{ inputs.toolchain_image }}" \
-            bash -c '${{ inputs.entrypoint }}'
-          ls -la src/_output/local/bin/linux/amd64/
+          set -ex
+          ${{ inputs.entrypoint }}
+          ls -la _output/local/bin/linux/amd64/
 
       - name: Assemble candidate image
         env:
           BASE_IMAGE: ${{ inputs.base_image }}
           COMPONENT: ${{ inputs.component }}
         run: |
+          set -ex
           cat > src/Dockerfile.candidate <<EOF
           FROM ${BASE_IMAGE}
           COPY _output/local/bin/linux/amd64/${COMPONENT} /usr/local/bin/${COMPONENT}
@@ -118,16 +119,16 @@ jobs:
       - name: Log in to ghcr.io
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Push candidate (candidate-* tag only; canonical/human tags repointed at GA)
-        id: publish-candidate
+      - name: Push candidate
+        id: publish
         env:
           REGISTRY_PATH: ${{ inputs.registry_path }}
           CANDIDATE_TAG: ${{ steps.tags.outputs.candidate }}
         run: |
+          set -ex
           docker tag lts-candidate:${{ inputs.component }} "${REGISTRY_PATH}:${CANDIDATE_TAG}"
           docker push "${REGISTRY_PATH}:${CANDIDATE_TAG}"
           DIGEST=$(docker buildx imagetools inspect "${REGISTRY_PATH}:${CANDIDATE_TAG}" --format '{{.Manifest.Digest}}')
-          REF="${REGISTRY_PATH}@${DIGEST}"
-          echo "digest=${DIGEST}"      >> "$GITHUB_OUTPUT"
-          echo "image_ref=${REF}"      >> "$GITHUB_OUTPUT"
-          echo "candidate published: ${REF}"
+          echo "digest=${DIGEST}"        >> "$GITHUB_OUTPUT"
+          echo "image_ref=${REGISTRY_PATH}@${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "published: ${REGISTRY_PATH}@${DIGEST}"
