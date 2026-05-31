@@ -11,7 +11,7 @@ Owners: **Ops** for the platform plumbing; **Lead** for legal/key custody.
 - [ ] **Org**: `oleksandr-minakov` private GitHub org with SSO and required-2FA.
 - [ ] **Source fork**: push `source-fork-kubernetes/` (sibling tree) as
       `oleksandr-minakov/kubernetes`. Run `scripts/lts-branch-init.sh v1.32.13` inside
-      the clone to cut `lts/k8s-1.32/kubernetes-1.32` from the upstream tag.
+      the clone to cut `release-1.32` from the upstream tag.
 - [ ] **Control repo**: push this directory as `oleksandr-minakov/test-control-repo`. Enable
       branch protection on `main`: required reviews from CODEOWNERS, required
       status checks (every `component-*` gate + `bundle-gate`), restrict force

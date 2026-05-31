@@ -7,7 +7,8 @@ upstream:
   subpath: cmd/kube-proxy
 fork:
   repo: oleksandr-minakov/kubernetes
-  lts_branch: lts/k8s-1.32/kubernetes-1.32
+  release_branch: release-1.32
+  version_file_repo: oleksandr-minakov/test-control-repo
 owner:
   primary: eng-1
   secondary: lead

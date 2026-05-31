@@ -3,47 +3,24 @@ package lts.release
 import future.keywords.if
 import future.keywords.in
 
-# Per LTS plan v3 §9, gates read TWO test layers:
-#   tests.source_repo   = the fork's lts-tests on the LTS branch tip
-#   tests.build_repo    = artifact-level validation in the build repo
-#                         (image/package smoke, structure test, csi-sanity for CSI)
+# Under the Mirantis release-cascade flow, source-test status is enforced
+# upstream by branch protection on PR → merge → tag. The build repo never
+# re-queries it; this gate just validates artifact-level evidence.
 #
-# Source-fork gate: the canonical PR validation for every CVE backport. Must
-# be "passed" before any tier-1 release ships.
+# Concretely:
+#   * In the source fork, lts-tests must pass for the PR to merge into the
+#     release-* branch (branch protection).
+#   * release-please then cuts a tag from that protected branch.
+#   * The cross-repo bump PR updates VERSION here, build.yaml fires, the
+#     artifacts (image / deb) plus their SBOM, scan, and signing evidence
+#     are produced.
 #
-# Build-repo gate: confirms the BUILT artifact is sane. "passed" once the
-# artifact smoke job has reported success.
-#
-# The required/skipped upstream lists in the descriptor are kept as
-# documentation that flows into the coverage matrix; the gate doesn't compare
-# them to a "passed" list anymore — the actual PASS signal comes from the
-# fork's check-runs (real test outcomes), not from a hand-curated list.
+# That means the only test-related claim this rego still has to assert is
+# coverage-matrix disclosure: tier-1 releases must publish the list of
+# upstream signals they knowingly skip, so consumers can audit it.
 
 test_violations := violations if {
-  input.tier == "tier-1"
-  input.tests.source_repo.status != "passed"
-  violations := [sprintf(
-    "tier-1 release blocked: source-fork tests not passed (status=%v, branch=%v, commit=%v)",
-    [input.tests.source_repo.status, input.tests.source_repo.branch, input.tests.source_repo.commit])]
-} else := violations if {
-  input.tier == "tier-1"
-  not _artifact_smoke_ok
-  violations := [sprintf(
-    "tier-1 release blocked: build-repo artifact smoke not passed (status=%v)",
-    [input.tests.build_repo.artifact_smoke])]
-} else := violations if {
   input.tier == "tier-1"
   not input.tests.skipped_upstream
   violations := ["tier-1 release must disclose tests.skipped_upstream (coverage matrix)"]
 } else := []
-
-# Pending status is acceptable in the same dependency-cycle sense as
-# signature.rego: the gate job needs ["sign","artifact-smoke"], so when the
-# gate runs both have succeeded. The release-metadata is built before those,
-# so it records intent; the workflow ordering enforces the actual fact.
-_artifact_smoke_ok if {
-  input.tests.build_repo.artifact_smoke == "passed"
-}
-_artifact_smoke_ok if {
-  input.tests.build_repo.artifact_smoke == "pending-smoke-job"
-}

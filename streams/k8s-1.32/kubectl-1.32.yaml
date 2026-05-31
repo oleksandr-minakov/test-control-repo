@@ -1,7 +1,7 @@
 component: kubectl
 bundle: k8s-1.32
 stream_id: kubectl-1.32-lts.k8s-1.32
-source_branch: lts/k8s-1.32/kubernetes-1.32
+source_branch: release-1.32
 upstream:
   tag: v1.32.13
   released: "2026-05-13"

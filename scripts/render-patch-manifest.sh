@@ -24,7 +24,7 @@ cat <<EOF
 # GENERATED — do not hand-edit (see scripts/render-patch-manifest.sh)
 component: ${component}
 stream: ${component}-1.32-lts.k8s-1.32
-source_branch: lts/k8s-1.32/kubernetes-1.32
+source_branch: release-1.32
 upstream_tag: ${upstream_tag}
 lts_build: ${lts_build}
 artifacts:

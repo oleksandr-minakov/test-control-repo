@@ -7,7 +7,8 @@ upstream:
   subpath: cmd/kube-controller-manager
 fork:
   repo: oleksandr-minakov/kubernetes
-  lts_branch: lts/k8s-1.32/kubernetes-1.32
+  release_branch: release-1.32
+  version_file_repo: oleksandr-minakov/test-control-repo
 owner:
   primary: eng-2
   secondary: lead
@@ -47,5 +48,5 @@ license:
   spdx: Apache-2.0
   trademark: needs-review
 notes: |
-  Built from the same lts/k8s-1.32/kubernetes-1.32 branch as the other k8s-core
+  Built from the same release-1.32 branch as the other k8s-core
   components. Patch manifest lists per-binary applicability.

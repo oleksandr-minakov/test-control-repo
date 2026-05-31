@@ -1,52 +1,62 @@
-# Versioning — k8s-core on bundle `k8s-1.32`
+# Versioning — k8s-core on the Mirantis release cascade
 
-Per §5, there is **one canonical record** rendered into each transport's
-native ordering. Pin consumers by **digest** (images) or by the exact
-`~lts<n>` revision (debs).
-
-## Canonical record
+Under the cascade, the canonical version is the **tag on the source fork's
+release branch**, produced by release-please. Format:
 
 ```
-upstream = 1.32.13
-lts      = 1            # incremented on every LTS rebuild
-bundle   = k8s-1.32
+vX.Y.Z-lts.N      e.g. v1.32.13-lts.0   (initial), v1.32.13-lts.1, ...
 ```
 
-Stored authoritatively in `streams/k8s-1.32/<component>-1.32.yaml`.
+- `X.Y.Z` is the upstream point release the LTS branch is based on.
+- `-lts.N` is the Mirantis LTS revision, incremented on every release
+  (CVE backport, hotfix, etc.) cut from the same upstream base.
 
-## Per-transport rendering
+The leading `v` is **canonical** in the tag and in `VERSION`. `build.sh`
+strips it for the deb `Version:` field and for image tags.
 
-| Transport | Renderer                                  | Result for the first build           |
-|-----------|-------------------------------------------|--------------------------------------|
-| OCI image | `scripts/render-oci-tags.sh v1.32.13 1`   | tag `1.32.13` (canonical, mutable) + tag `1.32.13-lts1` (human, stable) + immutable digest |
-| Deb       | `scripts/render-deb-version.sh v1.32.13 1`| `1.32.13-1~lts1`                   |
-| OCI labels (set in the build) | `_reusable-build-image.yml` | `net.lts.{component, upstream-tag, build, bundle, fork-branch}` |
+## Where it lives
 
-apt ordering (verified with `dpkg --compare-versions`):
+| Location                                  | Contents                  | Updated by                                |
+|-------------------------------------------|---------------------------|-------------------------------------------|
+| Source fork `version.txt`                 | `vX.Y.Z-lts.N`            | release-please                            |
+| Source fork tag                           | `vX.Y.Z-lts.N`            | release-please                            |
+| Build repo `VERSION` (this file)          | `vX.Y.Z-lts.N`            | release-please-action cross-repo bump PR  |
 
-```
-1.32.13-1            <  1.32.13-1~lts1     <  1.32.13-1~lts2     <  1.32.13-2
-```
+The cross-repo bump PR is what triggers `build.yaml` (it touches `VERSION`
+on a `release-*` branch).
 
-The `~lts<n>` form is **monotonically increasing** and never reserves a
-future upstream version number. Bumping `lts` in the canonical record bumps
-both `oci_human` and `deb_version` in lockstep.
+## Per-transport rendering at build time
+
+| Transport | What `build.sh` produces                                                  |
+|-----------|---------------------------------------------------------------------------|
+| OCI image | tag `X.Y.Z-lts.N` + `candidate-<GITHUB_RUN_ID>` + immutable digest        |
+| Deb       | `Version: X.Y.Z-lts.N` (leading `v` stripped)                             |
+| OCI labels| `net.lts.{component, tag, bundle, source-repo}` set inside the Dockerfile |
+
+The bundle label is derived from the upstream minor: `1.32.13-lts.0` →
+`net.lts.bundle=k8s-1.32`.
 
 ## Things explicitly NOT used
 
-- SemVer pre-release (`1.32.13-lts.1`) — sorts **below** the release and
-  excluded from SemVer range matching.
-- `+build` metadata — ignored for precedence, illegal in OCI tags.
+- SemVer pre-release matching (`1.32.13-lts.1` sorts **below** `1.32.13` for
+  SemVer-strict consumers — that's fine, we don't use SemVer ranges).
+- `+build` metadata — illegal in OCI tags.
+- A separate "human" tag scheme. The cascade gives us one canonical string;
+  we use it everywhere.
 
 ## Bundle release tag
 
-`k8s-1.32-lts.YYYY.MM` (+ `.hotfix.N` for KEV fast-track). Set by the
-`bundle-release.yml` workflow input.
+`k8s-1.32-lts.YYYY.MM` (+ `.hotfix.N` for KEV fast-track). The bundle tag
+is independent of the per-component cascade tag and continues to be set by
+the monthly release runbook.
 
-## When upstream releases v1.32.14
+## When upstream releases `v1.32.14`
 
-1. Open a PR that bumps `streams/k8s-1.32/*` `upstream.tag` to `v1.32.14` and
-   resets `lts_build` to `1` on each stream.
-2. Re-run each `component-*.yml` caller.
-3. Existing apt installations upgrade cleanly:
-   `1.32.13-1~lts3` → `1.32.14-1~lts1`.
+1. On the source fork, fast-forward `release-1.32` to incorporate the new
+   upstream point release (cherry-picks or a controlled merge — see
+   branching.md).
+2. release-please's next release PR will propose `v1.32.14-lts.0`.
+3. Merge it → tag is cut → cross-repo bump PR updates `VERSION` here →
+   `build.yaml` fires.
+4. Existing apt installations upgrade cleanly: `1.32.13-lts.3` →
+   `1.32.14-lts.0`.

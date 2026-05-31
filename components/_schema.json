@@ -33,11 +33,12 @@
     },
     "fork": {
       "type": "object",
-      "required": ["repo", "lts_branch"],
+      "required": ["repo", "release_branch"],
       "additionalProperties": false,
       "properties": {
-        "repo":       { "type": "string", "description": "Private fork repository, e.g. oleksandr-minakov/kubernetes." },
-        "lts_branch": { "type": "string", "description": "Branch name following §4 (lts/k8s-<bundle>/<component>-<major>.<minor>)." }
+        "repo":             { "type": "string", "description": "Source fork repository, e.g. oleksandr-minakov/kubernetes." },
+        "release_branch":   { "type": "string", "description": "Mirantis release-cascade branch on the source fork, e.g. release-1.32. release-please cuts tags from this branch and the cross-repo bump PR updates VERSION in the build repo." },
+        "version_file_repo":{ "type": "string", "description": "Informational: build repo that holds VERSION (target of the cross-repo bump PR)." }
       }
     },
     "owner": {

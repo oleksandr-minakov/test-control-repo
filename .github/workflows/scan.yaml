@@ -1,0 +1,78 @@
+name: scan
+
+# Daily rescan of the four image components against the latest VERSION.
+# The two deb components (kubelet, kubectl) are not persistently published in
+# this test setup (GHA upload-artifact only), so there's nothing for a daily
+# pull to point at — rescan is a no-op for them.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * *'
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  scan:
+    name: scan ${{ matrix.component }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - kube-apiserver
+          - kube-controller-manager
+          - kube-scheduler
+          - kube-proxy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag from VERSION
+        id: tag
+        run: |
+          set -euo pipefail
+          v="$(tr -d '[:space:]' < VERSION)"
+          # Image tags don't carry the "v" prefix (build.sh uses ${version#v}).
+          short="${v#v}"
+          echo "tag=${short}" >> "$GITHUB_OUTPUT"
+          echo "Resolved image tag: ${short}"
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install syft + grype
+        run: |
+          set -euo pipefail
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh  | sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Pull image
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/oleksandr-minakov/lts-k8s/${{ matrix.component }}:${{ steps.tag.outputs.tag }}"
+          docker pull "$ref"
+          echo "IMAGE_REF=${ref}" >> "$GITHUB_ENV"
+
+      - name: SBOM (syft)
+        run: |
+          set -euo pipefail
+          syft "$IMAGE_REF" -o cyclonedx-json > sbom-${{ matrix.component }}.cdx.json
+
+      - name: Scan (grype)
+        run: |
+          set -euo pipefail
+          grype "$IMAGE_REF" -o json > findings-${{ matrix.component }}.json || true
+
+      - name: Upload findings
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-${{ matrix.component }}-${{ steps.tag.outputs.tag }}
+          path: |
+            sbom-${{ matrix.component }}.cdx.json
+            findings-${{ matrix.component }}.json

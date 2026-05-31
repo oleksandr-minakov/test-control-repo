@@ -1,53 +1,58 @@
-# Branching for the `kubernetes/kubernetes` fork
+# Branching — Mirantis release-cascade for `kubernetes/kubernetes`
 
-Per §4, one private fork holds source for all six k8s-core components. Six
-components share **one LTS branch** because they all build from the same
-upstream source tree; per-binary applicability is decided in the patch
-manifest, not by separating branches.
+Under the cascade, the source fork holds **one** working branch per minor
+line: `release-1.32`. release-please cuts tags from that branch, and the
+cross-repo bump PR updates `VERSION` in this build repo. Six core
+components share a single source tree because they all build from the same
+upstream; per-binary patch applicability lives in the patch manifest, not
+in separate branches.
 
-## Branch names
+## Branches on the source fork
 
-| Branch                                | Purpose                                                       |
-|---------------------------------------|---------------------------------------------------------------|
-| `upstream/main`                       | Mirror of upstream `master`. **Never patched.**               |
-| `upstream/release-1.32`               | Mirror of upstream `release-1.32`. Never patched.             |
-| `lts/k8s-1.32/kubernetes-1.32`        | **The** LTS branch for all six components in the bundle.      |
-| `backport/<CVE>/lts-k8s-1.32-kubernetes-1.32` | Working branch for a single backport PR.              |
-| `core-assurance/INC-<ID>/lts-k8s-1.32-kubernetes-1.32` | Working branch for a Core Assurance incident fix. |
+| Branch                                                | Purpose                                                       |
+|-------------------------------------------------------|---------------------------------------------------------------|
+| `upstream/main`                                       | Mirror of upstream `master`. **Never patched.**               |
+| `upstream/release-1.32`                               | Mirror of upstream `release-1.32`. **Never patched.**         |
+| `release-1.32`                                        | **The** Mirantis LTS release line for 1.32. Protected; lts-tests required. |
+| `backport/<CVE>/release-1.32`                         | Working branch for a single CVE backport PR.                  |
+| `core-assurance/INC-<ID>/release-1.32`                | Working branch for a Core Assurance incident fix.             |
 
-## Cutting the LTS branch
+## Cutting `release-1.32`
 
 ```
 git fetch upstream
-git checkout -b lts/k8s-1.32/kubernetes-1.32 v1.32.13
-git push origin lts/k8s-1.32/kubernetes-1.32
+git checkout -b release-1.32 v1.32.13
+git push origin release-1.32
 ```
 
-The init script in the source-fork tree (`scripts/lts-branch-init.sh`) does
-exactly this and is idempotent.
+Then in the GitHub UI: enable branch protection on `release-1.32` requiring
+the `lts-tests` status check, and require PRs (no direct pushes).
 
-## Sync cadence (§4)
+## Sync cadence
 
-| Tier 1 (Core) | Daily metadata check, weekly mirror sync of `upstream/release-1.32`. |
+| Tier 1 (Core) | Daily metadata check; weekly mirror sync of `upstream/release-1.32`. |
 
-We **never** merge `upstream/*` into the LTS branch. The LTS branch receives
-**cherry-picks** from upstream onto a fresh `backport/<CVE>/...` branch, which
-then opens a PR against the LTS branch.
+`upstream/*` is **never** merged into `release-1.32`. The release line
+receives **cherry-picks** from upstream onto a fresh `backport/<CVE>/...`
+branch, which then opens a PR against `release-1.32`.
 
-## Backport workflow (v3)
+## Backport workflow
 
-1. Triage decides applicability (§2 step 4–5). One Issue per CVE×component.
-2. Engineer creates `backport/<CVE>/lts-k8s-1.32-kubernetes-1.32` from
-   `lts/k8s-1.32/kubernetes-1.32`.
+1. Triage decides applicability. One Issue per CVE×component.
+2. Engineer creates `backport/<CVE>/release-1.32` from `release-1.32`.
 3. Cherry-pick upstream fix(es). If non-clean, record the strategy
    (`reimplemented` | `partial` | `dropped`) in the PR description.
-4. **PR runs `lts-tests.yml` on the fork** — upstream unit tests for each
-   component + a six-binary compile-check. This is the canonical validation
-   of the patch (v3 §9 layer 1). Tier-1 non-clean → **two-person review**
-   (CODEOWNERS-enforced).
-5. Merge. Add a commit trailer `LTS-Patch: CVE-XXXX-YYYY`; the patch-manifest
-   generator (`scripts/render-patch-manifest.sh`) consumes it.
-6. The build repo's `component-<X>.yml` then runs hermetic build +
-   artifact-level validation (v3 §9 layer 2). Its gate checks that
-   `lts-tests` on the fork was green at the merged commit; if not, the
-   release is blocked.
+4. **PR runs `mirantis_release.yaml`** (alias: lts-tests) on the fork —
+   upstream unit tests for each component + a six-binary compile-check.
+   Branch protection makes this required. Tier-1 non-clean →
+   **two-person review** (CODEOWNERS-enforced).
+5. Merge. Add a commit trailer `LTS-Patch: CVE-XXXX-YYYY`; the
+   patch-manifest generator (`scripts/render-patch-manifest.sh`) consumes
+   it.
+6. release-please observes the merge, opens / advances a release PR (bumps
+   `version.txt`, appends to `CHANGELOG.md`). Merging the release PR cuts
+   tag `vX.Y.Z-lts.N` on `release-1.32` **and** opens a cross-repo PR
+   against the build repo updating `VERSION`.
+7. Merging the bump PR in the build repo triggers `build.yaml`. The build
+   does **not** re-fetch test status: by the time a tag exists, branch
+   protection has already enforced it.

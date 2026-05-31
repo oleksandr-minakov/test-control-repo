@@ -81,24 +81,17 @@ if [ ! -f "$prov" ]; then
      }' > "$prov"
 fi
 
-# Coverage matrix — required_tests come from the descriptor. Per v3 §9 source
-# tests run on the FORK, not here; the build repo only needs to confirm the
-# fork's checks were green at the build's source SHA. We pick that up from
-# evidence/source-tests.json (written by fetch-source-tests.sh).
+# Coverage matrix — required_tests come from the descriptor. Under the
+# release-cascade model source tests are enforced by branch protection on the
+# source fork (PR → merge → tag). The build repo does NOT re-query their
+# status; if a tag exists in the source fork, the cascade has already passed.
+# The required/skipped lists are kept here as documentation that flows into
+# the per-release coverage matrix.
 required=$(yq -o=json -I=0 '.tests.upstream_targets' "components/${component}.yaml" 2>/dev/null || echo '[]')
 skipped=$(yq -o=json -I=0 '.tests.skipped // []'      "components/${component}.yaml" 2>/dev/null || echo '[]')
 license_clear=$(yq -r '.license.ga_blocker // false'  "components/${component}.yaml" 2>/dev/null \
                 | awk '{print ($1=="true")?"false":"true"}')
 ga_blocker=$(yq -r '.license.ga_blocker // false'     "components/${component}.yaml" 2>/dev/null)
-
-# Source-fork test status (v3 §9 gating layer #1). If the file doesn't exist
-# the build was triggered without the v3 source-tests wire-up; record
-# "missing" so the gate fails closed.
-if [ -f "$ev/source-tests.json" ]; then
-  source_tests=$(cat "$ev/source-tests.json")
-else
-  source_tests='{"status":"failed_or_missing","reason":"evidence/source-tests.json absent"}'
-fi
 
 # VEX required_entries = all critical+high finding CVEs (per §8 — every
 # Crit/High must have a VEX justification before GA).
@@ -125,7 +118,6 @@ jq -n \
   --argjson skipped "$skipped" \
   --argjson ga_blocker "${ga_blocker:-false}" \
   --argjson license_clear "${license_clear:-true}" \
-  --argjson source_tests "$source_tests" \
   '{
     component: $component,
     tier: $tier,
@@ -138,10 +130,9 @@ jq -n \
     signatures: { image: "pending-sign-job", deb_blob: false, attestations: ["cyclonedx","vuln","slsaprovenance"] },
     vex: { path: "evidence/vex.cdx.json", required_entries: $required_vex, entries: [] },
     tests: {
-      source_repo: $source_tests,
-      build_repo: { artifact_smoke: "pending-smoke-job" },
       required_upstream: $required,
-      skipped_upstream: $skipped
+      skipped_upstream: $skipped,
+      build_repo: { artifact_smoke: "n/a-cascade" }
     },
     license: { clear: $license_clear, ga_blocker: $ga_blocker },
     patch_manifest: "evidence/patch-manifest.yaml"

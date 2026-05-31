@@ -1,0 +1,243 @@
+name: build
+
+# Single build entrypoint under the Mirantis release-cascade flow.
+#
+# Flow:
+#   source-fork PR → lts-tests → merge → release-please cuts tag in source fork
+#     → cross-repo bump PR lands here updating VERSION
+#       → this workflow fires on the push to VERSION and builds 6 components.
+#
+# There are no reusable workflows, no per-component callers. Just this file
+# + build.sh.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: |
+          Optional override of the source-fork ref/tag. Defaults to the
+          contents of VERSION (e.g. v1.32.13-lts.0).
+        required: false
+        type: string
+  push:
+    branches:
+      - 'release-*'
+    paths:
+      - 'VERSION'
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  resolve:
+    name: resolve tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tag
+        name: Read VERSION (or input override)
+        run: |
+          set -euo pipefail
+          override="${{ github.event.inputs.source_ref }}"
+          if [ -n "$override" ]; then
+            tag="$override"
+            echo "Using workflow_dispatch override: $tag"
+          else
+            tag="$(tr -d '[:space:]' < VERSION)"
+            echo "Using VERSION file: $tag"
+          fi
+          case "$tag" in
+            v*) ;;
+            *)  echo "tag '$tag' must start with v" >&2; exit 1 ;;
+          esac
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build ${{ matrix.component }}
+    needs: resolve
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: kube-apiserver
+            kind: image
+            base_image: gcr.io/distroless/static-debian12:nonroot
+          - component: kube-controller-manager
+            kind: image
+            base_image: gcr.io/distroless/static-debian12:nonroot
+          - component: kube-scheduler
+            kind: image
+            base_image: gcr.io/distroless/static-debian12:nonroot
+          - component: kube-proxy
+            kind: image
+            base_image: registry.k8s.io/build-image/distroless-iptables:v0.6.7
+          - component: kubelet
+            kind: deb
+            base_image: ''
+          - component: kubectl
+            kind: deb
+            base_image: ''
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@v4
+
+      - name: Checkout source fork @ ${{ needs.resolve.outputs.tag }}
+        uses: actions/checkout@v4
+        with:
+          repository: oleksandr-minakov/kubernetes
+          ref: ${{ needs.resolve.outputs.tag }}
+          path: src
+          fetch-depth: 1
+
+      - name: Resolve Go version
+        id: go
+        run: |
+          set -euo pipefail
+          if [ -f src/.go-version ]; then
+            v="$(tr -d '[:space:]' < src/.go-version)"
+          else
+            v="1.23.4"
+          fi
+          echo "version=${v}" >> "$GITHUB_OUTPUT"
+          echo "Go ${v}"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+          cache: false
+
+      - name: Free runner disk (k8s build is heavy)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          docker image prune -af || true
+          df -h
+
+      - name: Log in to ghcr.io
+        if: matrix.kind == 'image'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (${{ matrix.component }}, ${{ matrix.kind }})
+        id: build
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          args=(
+            --component "${{ matrix.component }}"
+            --kind      "${{ matrix.kind }}"
+            --tag       "${{ needs.resolve.outputs.tag }}"
+            --source-dir src
+          )
+          if [ "${{ matrix.kind }}" = "image" ]; then
+            args+=(
+              --registry-path "ghcr.io/oleksandr-minakov/lts-k8s/${{ matrix.component }}"
+              --base-image    "${{ matrix.base_image }}"
+            )
+          fi
+          ./build.sh "${args[@]}"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Install syft + grype
+        run: |
+          set -euo pipefail
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh  | sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+          syft  version
+          grype version
+
+      # --- image evidence ---------------------------------------------------
+      - name: SBOM (image)
+        if: matrix.kind == 'image'
+        run: |
+          set -euo pipefail
+          syft "${{ steps.build.outputs.image_ref }}" -o cyclonedx-json > sbom-${{ matrix.component }}.cdx.json
+
+      - name: Scan (image)
+        if: matrix.kind == 'image'
+        run: |
+          set -euo pipefail
+          grype "${{ steps.build.outputs.image_ref }}" -o json > findings-${{ matrix.component }}.json || true
+
+      - name: Cosign sign + attest CycloneDX (image)
+        if: matrix.kind == 'image'
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${{ steps.build.outputs.image_ref }}"
+          cosign attest --yes \
+            --predicate sbom-${{ matrix.component }}.cdx.json \
+            --type cyclonedx \
+            "${{ steps.build.outputs.image_ref }}"
+
+      - name: Upload image evidence
+        if: matrix.kind == 'image'
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-evidence-${{ matrix.component }}
+          path: |
+            sbom-${{ matrix.component }}.cdx.json
+            findings-${{ matrix.component }}.json
+
+      # --- deb evidence -----------------------------------------------------
+      - name: SBOM (deb)
+        if: matrix.kind == 'deb'
+        run: |
+          set -euo pipefail
+          syft "file:${{ steps.build.outputs.deb_path }}" -o cyclonedx-json > sbom-${{ matrix.component }}.cdx.json
+
+      - name: Scan (deb)
+        if: matrix.kind == 'deb'
+        run: |
+          set -euo pipefail
+          grype "file:${{ steps.build.outputs.deb_path }}" -o json > findings-${{ matrix.component }}.json || true
+
+      - name: Cosign sign-blob (deb)
+        if: matrix.kind == 'deb'
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --output-signature "${{ steps.build.outputs.deb_path }}.sig" \
+            --output-certificate "${{ steps.build.outputs.deb_path }}.pem" \
+            "${{ steps.build.outputs.deb_path }}"
+
+      - name: Upload deb artifact
+        if: matrix.kind == 'deb'
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.component }}
+          path: |
+            ${{ steps.build.outputs.deb_path }}
+
+      - name: Upload deb signing side-evidence
+        if: matrix.kind == 'deb'
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.component }}-signing
+          path: |
+            ${{ steps.build.outputs.deb_path }}.sig
+            ${{ steps.build.outputs.deb_path }}.pem
+            sbom-${{ matrix.component }}.cdx.json
+            findings-${{ matrix.component }}.json
+
+      - name: Summary
+        if: always()
+        run: |
+          status="${{ job.status }}"
+          echo "::notice title=build ${{ matrix.component }}::component=${{ matrix.component }} kind=${{ matrix.kind }} tag=${{ needs.resolve.outputs.tag }} status=${status}"

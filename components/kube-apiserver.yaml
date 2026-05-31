@@ -7,7 +7,10 @@ upstream:
   subpath: cmd/kube-apiserver
 fork:
   repo: oleksandr-minakov/kubernetes
-  lts_branch: lts/k8s-1.32/kubernetes-1.32
+  release_branch: release-1.32
+  # Where the cross-repo bump PR lands (informational only; this descriptor
+  # is *in* the build repo, but the field documents the link explicitly).
+  version_file_repo: oleksandr-minakov/test-control-repo
 owner:
   primary: eng-2
   secondary: lead

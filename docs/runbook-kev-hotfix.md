@@ -25,7 +25,7 @@ exploited; **bypasses** the monthly bundle cadence but **not** the gates.
 ## T+24h — Review + merge (Tier 1 → two-person)
 
 - [ ] Two engineers review. Non-clean cherry-picks require the second review.
-- [ ] Merge to `lts/k8s-1.32/kubernetes-1.32`. Commit trailer
+- [ ] Merge to `release-1.32`. Commit trailer
       `LTS-Patch: <CVE>` present.
 
 ## T+36h — Hermetic build, SBOM, scan, sign

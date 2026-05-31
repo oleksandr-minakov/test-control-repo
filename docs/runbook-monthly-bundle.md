@@ -1,7 +1,8 @@
 # Runbook — Monthly bundle release
 
-Realises Appendix A of the plan. Owner: **Lead** (release approval). All
-timings are relative to T-0 = GA promotion.
+Realises Appendix A of the plan, adapted to the Mirantis release cascade.
+Owner: **Lead** (release approval). All timings relative to T-0 = GA
+promotion.
 
 ## T-10d — Triage freeze
 
@@ -11,28 +12,34 @@ timings are relative to T-0 = GA promotion.
       `needs-review` → scoped out of this bundle.
 - [ ] Per-component patch queue snapshotted; commit trailers verified.
 
-## T-7d — Candidate builds green
+## T-7d — Cascade green for the candidate tag
 
-- [ ] `lts-tests.yml` on the fork is green at the head of
-      `lts/k8s-1.32/kubernetes-1.32` (v3 §9 source-layer gate).
-- [ ] Each of the six `component-*` workflows has a green run on the head
-      of `lts/k8s-1.32/kubernetes-1.32`.
-- [ ] SBOM, signatures, attestations, patch manifest, release metadata
-      artifacts exist for every candidate.
+- [ ] All required backport PRs merged into source fork `release-1.32`
+      (branch protection guarantees `lts-tests` was green on each one).
+- [ ] release-please's release PR for the cycle's `vX.Y.Z-lts.N` has been
+      reviewed and merged → tag exists on `release-1.32`.
+- [ ] The cross-repo bump PR has landed on this repo's `release-1.32`
+      branch, updating `VERSION`.
+- [ ] `build.yaml` has a green run on that bump commit. All six components
+      produced artifacts:
+      * 4 images on `ghcr.io/oleksandr-minakov/lts-k8s/*`
+      * 2 deb artifacts uploaded to the run
+- [ ] SBOM, scan findings, cosign signatures + attestations exist for every
+      artifact.
 - [ ] Counts (`scan.summary.critical`, `.high`) reviewed by Lead.
 
 ## T-5d — Bundle integration smoke
 
-- [ ] `bundle-release.yml` triggered manually with the release tag (e.g.
-      `2026.06`).
-- [ ] `collect-bundle-streams.sh` produces `bundle-manifest.json`.
-- [ ] `bundle-smoke.sh` returns OK on the kind cluster (apiserver healthz,
-      scheduler placement, kube-proxy ClusterIP).
+- [ ] `bundles/` manifest reviewed; `scripts/collect-bundle-streams.sh`
+      produces `bundle-manifest.json` from the published images.
+- [ ] Manual kind smoke on the four image tags: apiserver `/healthz`,
+      scheduler placement, kube-proxy ClusterIP routing.
 - [ ] If failure: scope back, do not stretch the gate.
 
 ## T-3d — Release-readiness review
 
-- [ ] OPA policy gate green for every component **and** the bundle.
+- [ ] OPA policy gate green per component (now artifact-level only — the
+      cascade has already gated tests).
 - [ ] Coverage matrix (per-stream `tests.skipped_upstream`) reviewed and
       attached to the release.
 - [ ] Evidence bundle assembled and uploaded.
@@ -40,7 +47,7 @@ timings are relative to T-0 = GA promotion.
 ## T-1d — Customer advisory
 
 - [ ] Draft customer advisory distinguishing **awareness / applicability /
-      fix availability / rollout** (§7). Rollout language explicitly
+      fix availability / rollout**. Rollout language explicitly
       customer-owned.
 - [ ] Lead + Eng reviewer sign off.
 
@@ -57,4 +64,6 @@ timings are relative to T-0 = GA promotion.
 ## Hotfix exception
 
 If a KEV/actively-exploited CVE lands between bundles, follow
-`runbook-kev-hotfix.md` instead.
+`runbook-kev-hotfix.md` instead. The cascade still applies — the only
+difference is the release-please PR is merged out-of-band on a
+hotfix-priority basis.

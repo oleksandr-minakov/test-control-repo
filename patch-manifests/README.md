@@ -5,7 +5,7 @@ Generated artifacts. **Do not hand-edit.**
 These are produced by `scripts/render-patch-manifest.sh` during each
 component release, from:
 
-1. `git log lts/k8s-1.32/kubernetes-1.32 --grep '^LTS-Patch:'` for commit
+1. `git log release-1.32 --grep '^LTS-Patch:'` for commit
    trailers.
 2. `gh issue list --label cve --json ...` for ticket state and VEX
    justification.
