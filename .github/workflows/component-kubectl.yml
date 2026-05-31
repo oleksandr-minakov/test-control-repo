@@ -15,7 +15,10 @@ on:
 
 permissions:
   contents: read
-  packages: read
+  # packages: write required by the shared _reusable-sign.yml even on the deb
+  # path (GHA requires callers to grant >= reusable's declared permissions);
+  # nothing actually pushes to ghcr from this workflow.
+  packages: write
   id-token: write
 
 jobs:

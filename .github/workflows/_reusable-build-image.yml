@@ -83,14 +83,16 @@ jobs:
       - name: Hermetic build (network=none; vendored deps)
         run: |
           # kubernetes/kubernetes vendors deps under ./vendor, so no module
-          # download is needed; --network=none enforces that.
+          # download is needed; --network=none enforces that. Login shell
+          # (-l) intentionally avoided — golang's bookworm image relies on
+          # the Dockerfile ENV PATH which login shells override.
           docker run --rm --network=none \
             -v "${PWD}/src:/src" -w /src \
             -e GOFLAGS="-mod=readonly -trimpath" \
             -e GOSUMDB=off \
             -e CGO_ENABLED=0 \
             "${{ inputs.toolchain_image }}" \
-            bash -lc '${{ inputs.entrypoint }}'
+            bash -c '${{ inputs.entrypoint }}'
           ls -la src/_output/local/bin/linux/amd64/
 
       - name: Assemble candidate image
