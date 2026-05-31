@@ -1,65 +1,91 @@
 # LTS Control Repo — `k8s-core` (bundle `k8s-1.32`)
 
-This is the **modular unified control repo** (§4) for the LTS service. It
-currently scopes the six Kubernetes core components built from one upstream
-repo (`kubernetes/kubernetes`), based on upstream **`v1.32.13`**:
+Modular unified control repo for the LTS maintenance service. Currently
+scoped to the six Kubernetes core components built from one upstream fork
+([oleksandr-minakov/kubernetes](https://github.com/oleksandr-minakov/kubernetes)),
+based on upstream **`v1.32.13`**:
 
-| Component                 | Transport | Bucket | Owner | Descriptor                                      |
-|---------------------------|-----------|--------|-------|-------------------------------------------------|
-| `kube-apiserver`          | OCI       | A      | eng-2 | [components/kube-apiserver.yaml](components/kube-apiserver.yaml) |
-| `kube-controller-manager` | OCI       | A      | eng-2 | [components/kube-controller-manager.yaml](components/kube-controller-manager.yaml) |
-| `kube-scheduler`          | OCI       | A      | eng-2 | [components/kube-scheduler.yaml](components/kube-scheduler.yaml) |
-| `kube-proxy`              | OCI       | B      | eng-1 | [components/kube-proxy.yaml](components/kube-proxy.yaml) |
-| `kubelet`                 | deb       | B      | eng-1 | [components/kubelet.yaml](components/kubelet.yaml) |
-| `kubectl`                 | deb       | A      | eng-2 | [components/kubectl.yaml](components/kubectl.yaml) |
+| Component                 | Transport     | Test bucket | Registry / Artifact                                                            |
+|---------------------------|---------------|-------------|--------------------------------------------------------------------------------|
+| `kube-apiserver`          | OCI (ghcr.io) | A           | `ghcr.io/oleksandr-minakov/lts-k8s/kube-apiserver`                             |
+| `kube-controller-manager` | OCI (ghcr.io) | A           | `ghcr.io/oleksandr-minakov/lts-k8s/kube-controller-manager`                    |
+| `kube-scheduler`          | OCI (ghcr.io) | A           | `ghcr.io/oleksandr-minakov/lts-k8s/kube-scheduler`                             |
+| `kube-proxy`              | OCI (ghcr.io) | B           | `ghcr.io/oleksandr-minakov/lts-k8s/kube-proxy`                                 |
+| `kubelet`                 | deb           | B           | GHA artifact `deb-kubelet` (deb repository is out-of-scope for the test repo)  |
+| `kubectl`                 | deb           | A           | GHA artifact `deb-kubectl`                                                     |
 
-All six are built from one LTS branch in the private fork:
-`lts/k8s-1.32/kubernetes-1.32` of `oleksandr-minakov/kubernetes`.
+All six are built from one LTS branch in the source fork:
+`lts/k8s-1.32/kubernetes-1.32`, cut from upstream `v1.32.13`.
+
+## Pipeline (per component, all jobs in GHA-hosted ubuntu-latest)
+
+```
+load-descriptor   # parse components/<name>.yaml -> job outputs
+   -> build       # hermetic-ish: golang:1.23.4-bookworm in --network=none container
+   -> sbom        # Syft CycloneDX, uploaded as artifact
+   -> scan        # Grype + (Aikido stub commented), merged findings JSON
+   -> evidence    # patch-manifest + release-metadata.json from real outputs
+   -> sign        # cosign keyless via OIDC -> Sigstore Fulcio/Rekor
+   -> gate        # Conftest over policy/*.rego on release-metadata.json
+   -> promote     # (image only) crane-retag canonical/human at GA digest
+```
+
+Candidate images are pushed to `:candidate-<run_id>`; canonical (`1.32.13`) and
+human (`1.32.13-lts1`) tags are only repointed by the `promote` job on the
+default branch, after the gate is green.
+
+Debs are uploaded as GHA artifacts (`deb-kubelet`, `deb-kubectl`); the cosign
+keyless `sign-blob` signature lands as a side artifact (`signing-<component>`).
 
 ## Layout
 
 ```
-components/         Descriptors — one source of truth per component (§6)
-streams/k8s-1.32/   Per-stream metadata (lifecycle, rendered versions)
-bundles/            Bundle manifests (the customer-facing release unit)
-policy/             OPA/Conftest gates run on release metadata (§6)
-toolchains/         Pinned Go + deb-build images, runner OS, CLI pins
+components/         Descriptors — one source of truth per component
+streams/k8s-1.32/   Per-stream metadata
+bundles/            Bundle manifest (the customer-facing release unit)
+policy/             OPA/Conftest gates run on release-metadata.json
+toolchains/         Pinned CLI versions + base Dockerfiles
 scripts/            Version rendering, evidence assembly, advisory polling
-.github/workflows/  Reusable workflows + one caller per component
-docs/               Runbooks, branching, versioning, infra-setup checklist
-patch-manifests/    Generated patch records (do not hand-edit)
+.github/workflows/  6 reusable + 6 component callers + bundle + advisory monitor
+docs/               Branching, versioning, runbooks, coverage matrix
+patch-manifests/    Generated patch records + advisory cursor state
 ```
 
-## How a release happens (Appendix A, in code)
+## Triggering
 
-1. Hourly, `.github/workflows/advisory-monitor.yml` polls each descriptor's
-   `advisory_sources` and opens an Issue per CVE×component.
-2. AI triage proposes VEX status + cherry-pick feasibility as an Issue
-   comment. **Humans confirm; no autonomous merges** (§8).
-3. Backport PR opened in the source fork; merged into
-   `lts/k8s-1.32/kubernetes-1.32`.
-4. Component caller workflow runs:
-   build → SBOM → scan → assemble evidence → sign → policy gate.
-5. Monthly, `bundle-release.yml` collects candidate digests into a bundle
-   manifest, runs integration smoke, runs the bundle policy gate, and opens
-   a GA promotion PR (Lead approval required per `CODEOWNERS`).
+```bash
+# Build one component:
+gh workflow run component-kubectl.yml -f lts_build=1
 
-## What is NOT done yet (intentional)
+# Or the bundle (collects current candidates, runs kind-based smoke):
+gh workflow run bundle-release.yml -f tag=2026.06
 
-This repo is the skeleton produced from the plan in
-`lts_maintenance_plan_v2_2.md`. The following items are tracked in
-[docs/infra-setup.md](docs/infra-setup.md):
+# Advisory monitor (also runs hourly on cron):
+gh workflow run advisory-monitor.yml
+```
 
-- Toolchain image digests (Go 1.23.4 + deb-build) — `TODO-PIN`.
-- Base image digests (distroless-static, kube-proxy-base) — `TODO-PIN`.
-- Vault setup, signing keys, deb repo key — secrets are placeholders.
-- Aikido endpoint — `aikido-scan.sh` runs as stub until procurement closes.
-- Self-hosted runner pool (`frozen-runner-v1`) — see `toolchains/runner-os.md`.
+## What's stubbed in this test setup
 
-These are out-of-band; the workflows fail closed when they're missing.
+The plan calls for a richer production stack; the test repo keeps the shape
+of it but takes simpler defaults:
 
-## Authoritative references
+| Plan calls for             | Test repo uses                                  |
+|----------------------------|-------------------------------------------------|
+| Self-hosted frozen runners | `ubuntu-latest` (GHA-hosted)                    |
+| Vault-issued cosign keys   | Cosign **keyless** via GHA OIDC -> Sigstore     |
+| Aikido primary scanner     | Commented; Grype-only                           |
+| Pinned toolchain by digest | `docker.io/library/golang:1.23.4-bookworm`      |
+| Signed deb repository      | GHA `upload-artifact`                           |
+| Module proxy (Athens)      | Not needed — k8s vendor tree is committed       |
+| AI triage agent            | Stub script commented in advisory-monitor       |
 
-- [`lts_maintenance_plan_v2_2.md`](../../lts_maintenance_plan_v2_2.md) — the
-  plan this repo implements.
-- `constraints.md` (project knowledge) — wins on any disagreement.
+All of these are commented and clearly scoped — uncomment when the
+production setup is in place.
+
+## See also
+
+- [docs/branching.md](docs/branching.md) — branching model for the source fork
+- [docs/versioning.md](docs/versioning.md) — OCI tag + deb revision rendering
+- [docs/runbook-monthly-bundle.md](docs/runbook-monthly-bundle.md)
+- [docs/runbook-kev-hotfix.md](docs/runbook-kev-hotfix.md)
+- [docs/coverage-matrix-template.md](docs/coverage-matrix-template.md)

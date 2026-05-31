@@ -1,7 +1,7 @@
 # Conftest config consumed by _reusable-policy-gate.yml.
 # Namespace lts.release matches the package declared in each .rego file.
 
-policy = ["control-repo/policy"]
+policy = ["policy"]
 namespace = ["lts.release"]
 # Treat all rule failures as denies; no soft-fail at this stage.
 all_namespaces = false
