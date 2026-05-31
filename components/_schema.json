@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lts.example/schema/component.v1.json",
+  "title": "LTS component descriptor",
+  "description": "One descriptor per maintained upstream project. Drives reusable workflows, policy gates, and dashboards. See lts_maintenance_plan_v2_2.md §6.",
+  "type": "object",
+  "required": [
+    "name",
+    "tier",
+    "upstream",
+    "fork",
+    "owner",
+    "build",
+    "distribution",
+    "advisory_sources",
+    "tests",
+    "vex_default"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "name":   { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "family": { "type": "string", "description": "Group used for ownership and bundle integration (e.g. k8s-core, runtimes, cni)." },
+    "tier":   { "enum": ["tier-1", "tier-2", "tier-3"] },
+    "upstream": {
+      "type": "object",
+      "required": ["repo", "tag", "subpath"],
+      "additionalProperties": false,
+      "properties": {
+        "repo":    { "type": "string", "format": "uri" },
+        "tag":     { "type": "string", "description": "Upstream release tag the LTS branch is cut from (e.g. v1.32.13)." },
+        "subpath": { "type": "string", "description": "Path inside the upstream repo that produces this component's artifact." }
+      }
+    },
+    "fork": {
+      "type": "object",
+      "required": ["repo", "lts_branch"],
+      "additionalProperties": false,
+      "properties": {
+        "repo":       { "type": "string", "description": "Private fork repository, e.g. oleksandr-minakov/kubernetes." },
+        "lts_branch": { "type": "string", "description": "Branch name following §4 (lts/k8s-<bundle>/<component>-<major>.<minor>)." }
+      }
+    },
+    "owner": {
+      "type": "object",
+      "required": ["primary"],
+      "additionalProperties": false,
+      "properties": {
+        "primary":   { "type": "string" },
+        "secondary": { "type": "string" }
+      }
+    },
+    "build": {
+      "type": "object",
+      "required": ["method", "toolchain_image", "entrypoint"],
+      "additionalProperties": false,
+      "properties": {
+        "method":          { "enum": ["go-binary", "go-image", "deb-package"] },
+        "toolchain_image": { "type": "string", "description": "Pinned toolchain container, referenced by digest (§6)." },
+        "entrypoint":      { "type": "string", "description": "Make target or script inside the upstream repo." },
+        "goflags":         { "type": "string", "default": "-mod=readonly -trimpath" },
+        "ldflags":         { "type": "string" },
+        "cgo_enabled":     { "type": "string", "enum": ["0", "1"], "default": "0" },
+        "module_proxy":    { "type": "string", "description": "Athens or equivalent proxy URL placeholder." }
+      }
+    },
+    "distribution": {
+      "type": "object",
+      "required": ["transports"],
+      "additionalProperties": false,
+      "properties": {
+        "transports": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "enum": ["oci", "deb"] }
+        },
+        "oci": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "registry_path": { "type": "string", "description": "${REGISTRY}/lts/k8s/<component>." },
+            "base_image":    { "type": "string", "description": "Distroless or rebuilt-base image (pin by digest)." },
+            "labels_prefix": { "type": "string", "default": "net.lts" }
+          }
+        },
+        "deb": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "package_name":  { "type": "string" },
+            "section":       { "type": "string", "default": "admin" },
+            "priority":      { "type": "string", "default": "optional" },
+            "architectures": { "type": "array", "items": { "enum": ["amd64"] }, "default": ["amd64"] },
+            "maintainer":    { "type": "string" }
+          }
+        }
+      }
+    },
+    "advisory_sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["kind", "url"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "enum": ["github-advisory", "vendor-page", "kev", "osv", "oss-security", "mailing-list"] },
+          "url":  { "type": "string", "format": "uri" }
+        }
+      }
+    },
+    "tests": {
+      "type": "object",
+      "required": ["bucket", "upstream_targets"],
+      "additionalProperties": false,
+      "properties": {
+        "bucket":           { "enum": ["A", "B", "C", "D"], "description": "Per §9: A=standard GHA, B=privileged/larger, C=external lab, D=special hardware." },
+        "upstream_targets": { "type": "array", "items": { "type": "string" }, "description": "make targets reused verbatim from upstream." },
+        "lts_extras":       { "type": "array", "items": { "type": "string" }, "default": [] },
+        "skipped":          { "type": "array", "items": { "type": "string" }, "description": "Upstream signal we knowingly don't reproduce; mirrored into the per-release coverage matrix." }
+      }
+    },
+    "vex_default": { "enum": ["affected", "not_affected", "needs_review"], "description": "Starting position for AI triage; humans confirm." },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "spdx":       { "type": "string" },
+        "trademark":  { "enum": ["clear", "needs-review", "blocked"], "default": "clear" },
+        "ga_blocker": { "type": "boolean", "default": false }
+      }
+    },
+    "notes": { "type": "string" }
+  }
+}

@@ -1,0 +1,58 @@
+name: kube-apiserver
+family: k8s-core
+tier: tier-1
+upstream:
+  repo: https://github.com/kubernetes/kubernetes
+  tag: v1.32.13
+  subpath: cmd/kube-apiserver
+fork:
+  repo: oleksandr-minakov/kubernetes
+  lts_branch: lts/k8s-1.32/kubernetes-1.32
+owner:
+  primary: eng-2
+  secondary: lead
+build:
+  method: go-image
+  # Production would pin by digest; the test repo uses the tagged upstream
+  # golang image so the workflow runs without out-of-band image publishing.
+  toolchain_image: docker.io/library/golang:1.23.4-bookworm
+  entrypoint: make WHAT=cmd/kube-apiserver KUBE_BUILD_PLATFORMS=linux/amd64
+  goflags: -mod=readonly -trimpath
+  cgo_enabled: "0"
+  module_proxy: ""
+distribution:
+  transports: [oci]
+  oci:
+    registry_path: ghcr.io/oleksandr-minakov/lts-k8s/kube-apiserver
+    base_image: gcr.io/distroless/static-debian12:nonroot
+    labels_prefix: net.lts
+advisory_sources:
+  - kind: github-advisory
+    url: https://github.com/kubernetes/kubernetes/security/advisories
+  - kind: vendor-page
+    url: https://kubernetes.io/docs/reference/issues-security/official-cve-feed/
+  - kind: mailing-list
+    url: https://groups.google.com/g/kubernetes-security-announce
+  - kind: kev
+    url: https://www.cisa.gov/known-exploited-vulnerabilities-catalog
+  - kind: osv
+    url: https://osv.dev/list?q=kubernetes&ecosystem=Go
+tests:
+  bucket: A
+  upstream_targets:
+    - make test WHAT=./cmd/kube-apiserver/... GOFLAGS=-mod=readonly
+    - make test WHAT=./pkg/kubeapiserver/... GOFLAGS=-mod=readonly
+    - make test-integration WHAT=./test/integration/apiserver/...
+  lts_extras:
+    - 'kind-cluster-smoke — apiserver readiness + /healthz + a simple Pod admission round-trip'
+  skipped:
+    - test-e2e (full conformance suite — bucket B, gated on larger runners)
+vex_default: needs_review
+license:
+  spdx: Apache-2.0
+  trademark: needs-review
+  ga_blocker: false
+notes: |
+  Kubernetes core; all six k8s-core components share one upstream repo and one LTS
+  branch. CVE applicability is decided per-binary because a finding may touch only
+  one of the six. See docs/branching.md.

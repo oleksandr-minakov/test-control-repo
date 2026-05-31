@@ -1,0 +1,95 @@
+name: _reusable-sign
+# Cosign keyless (sigstore) signature + attestations.
+# For test repo: no Vault — signatures are anchored to the GitHub Actions
+# workflow identity via Fulcio/Rekor. SLSA L2 provenance attestation is
+# produced from the SBOM-anchored statement.
+#
+# Per §8 the production path uses Vault-managed keys; the policy gate doesn't
+# care which trust root signed the artifact, only that signatures exist.
+on:
+  workflow_call:
+    inputs:
+      target_kind:    { type: string, required: true }   # image | deb
+      target_ref:     { type: string, required: true }   # image ref incl. digest, OR deb artifact name
+      deb_filename:   { type: string, required: false, default: '' }
+      component:      { type: string, required: true }
+    outputs:
+      signature_status:
+        value: ${{ jobs.sign.outputs.status }}
+
+permissions:
+  contents: read
+  packages: write   # cosign updates the OCI referrers index for image attestations
+  id-token: write   # keyless signing via OIDC
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.s.outputs.status }}
+    env:
+      COSIGN_EXPERIMENTAL: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Cosign (pinned)
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Download SBOM
+        uses: actions/download-artifact@v4
+        with:
+          name: sbom-${{ inputs.component }}
+          path: sbom/
+
+      - name: Download evidence (VEX + provenance scaffolds)
+        uses: actions/download-artifact@v4
+        with:
+          name: evidence-${{ inputs.component }}
+          path: evidence/
+
+      - name: Log in to ghcr.io (image sigs)
+        if: inputs.target_kind == 'image'
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Download deb artifact (deb path)
+        if: inputs.target_kind == 'deb'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.target_ref }}
+          path: dist/
+
+      - name: Sign image (keyless) + attach CycloneDX/VEX/SLSA attestations
+        if: inputs.target_kind == 'image'
+        id: sign-image
+        run: |
+          set -e
+          SBOM=$(ls sbom/*.cdx.json | head -n1)
+          cosign sign --yes "${{ inputs.target_ref }}"
+          cosign attest --yes --type cyclonedx       --predicate "${SBOM}"                              "${{ inputs.target_ref }}"
+          cosign attest --yes --type vuln            --predicate evidence/vex.cdx.json                  "${{ inputs.target_ref }}"
+          cosign attest --yes --type slsaprovenance  --predicate evidence/provenance.intoto.jsonl       "${{ inputs.target_ref }}"
+
+      - name: Sign deb (keyless blob sig)
+        if: inputs.target_kind == 'deb'
+        id: sign-deb
+        run: |
+          set -e
+          DEB="dist/${{ inputs.deb_filename }}"
+          cosign sign-blob --yes \
+            --output-signature "${DEB}.sig" \
+            --output-certificate "${DEB}.cert" \
+            "${DEB}"
+
+      - name: Upload signing artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: signing-${{ inputs.component }}
+          path: |
+            dist/*.sig
+            dist/*.cert
+          if-no-files-found: ignore
+          retention-days: 365
+
+      - id: s
+        run: echo "status=signed" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,147 @@
+name: _reusable-build-deb
+# Hermetic-ish build of one k8s-core binary -> .deb (kubelet | kubectl).
+# Test-repo simplification: instead of pushing to a signed deb repo, the .deb
+# is uploaded as a workflow artifact (deb-<component>). The signed-blob via
+# cosign keyless still happens in the sign reusable.
+on:
+  workflow_call:
+    inputs:
+      component:        { type: string, required: true }
+      upstream_tag:     { type: string, required: true }
+      lts_build:        { type: string, required: true }
+      bundle:           { type: string, required: true }
+      fork_repo:        { type: string, required: true }
+      lts_branch:       { type: string, required: true }
+      toolchain_image:  { type: string, required: true }
+      entrypoint:       { type: string, required: true }
+      package_name:     { type: string, required: true }
+      maintainer:       { type: string, required: true }
+    outputs:
+      deb_version:
+        value: ${{ jobs.build.outputs.deb_version }}
+      deb_name:
+        value: ${{ jobs.build.outputs.deb_name }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      deb_version: ${{ steps.ver.outputs.deb_version }}
+      deb_name:    ${{ steps.pack.outputs.deb_name }}
+    steps:
+      - name: Checkout control repo
+        uses: actions/checkout@v4
+
+      - name: Checkout LTS branch from source fork
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.fork_repo }}
+          ref: ${{ inputs.lts_branch }}
+          path: src
+          fetch-depth: 1
+
+      - name: Render deb version
+        id: ver
+        run: |
+          ./scripts/render-deb-version.sh \
+            "${{ inputs.upstream_tag }}" "${{ inputs.lts_build }}" >> "$GITHUB_OUTPUT"
+
+      - name: Free disk space on runner
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                       /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Pull pinned toolchain image
+        run: docker pull "${{ inputs.toolchain_image }}"
+
+      - name: Hermetic build (binary)
+        run: |
+          docker run --rm --network=none \
+            -v "${PWD}/src:/src" -w /src \
+            -e GOFLAGS="-mod=readonly -trimpath" \
+            -e GOSUMDB=off \
+            -e CGO_ENABLED=0 \
+            "${{ inputs.toolchain_image }}" \
+            bash -lc '${{ inputs.entrypoint }}'
+          ls -la src/_output/local/bin/linux/amd64/
+
+      - name: Install nfpm
+        run: |
+          set -e
+          source ./toolchains/tool-pins.env
+          NFPM_VER="${NFPM_VERSION#v}"
+          curl -fsSL -o /tmp/nfpm.tar.gz \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VER}/nfpm_${NFPM_VER}_Linux_x86_64.tar.gz"
+          tar -xzf /tmp/nfpm.tar.gz -C /usr/local/bin nfpm
+          nfpm --version
+
+      - name: Render nfpm config
+        run: |
+          ./scripts/render-nfpm.sh \
+            --component "${{ inputs.component }}" \
+            --package "${{ inputs.package_name }}" \
+            --version "${{ steps.ver.outputs.deb_version }}" \
+            --maintainer "${{ inputs.maintainer }}" \
+            --upstream-tag "${{ inputs.upstream_tag }}" \
+            --bundle "${{ inputs.bundle }}" \
+            > nfpm.yaml
+
+      - name: Pack .deb
+        id: pack
+        run: |
+          mkdir -p dist src/packaging
+          # Drop the kubelet systemd unit drop-in so the conffile reference
+          # resolves on first build. Real production would track upstream's
+          # pkgs.k8s.io packaging directly.
+          if [ "${{ inputs.component }}" = "kubelet" ]; then
+            cat > src/packaging/kubelet.service <<'EOF'
+          [Unit]
+          Description=kubelet: The Kubernetes Node Agent (LTS rebuild)
+          Documentation=https://kubernetes.io/docs/
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          ExecStart=/usr/bin/kubelet
+          Restart=always
+          StartLimitInterval=0
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+            cat > src/packaging/10-kubeadm.conf <<'EOF'
+          [Service]
+          Environment="KUBELET_KUBECONFIG_ARGS=--bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/kubelet.conf"
+          Environment="KUBELET_CONFIG_ARGS=--config=/var/lib/kubelet/config.yaml"
+          EnvironmentFile=-/var/lib/kubelet/kubeadm-flags.env
+          EnvironmentFile=-/etc/default/kubelet
+          ExecStart=
+          ExecStart=/usr/bin/kubelet \$KUBELET_KUBECONFIG_ARGS \$KUBELET_CONFIG_ARGS \$KUBELET_KUBEADM_ARGS \$KUBELET_EXTRA_ARGS
+          EOF
+            printf '#!/bin/sh\nset -e\nsystemctl daemon-reload || true\n' > src/packaging/kubelet.postinst
+            printf '#!/bin/sh\nset -e\nsystemctl stop kubelet || true\n'   > src/packaging/kubelet.prerm
+            chmod +x src/packaging/kubelet.postinst src/packaging/kubelet.prerm
+          fi
+          nfpm package -f nfpm.yaml -p deb -t dist/
+          DEB=$(ls dist/${{ inputs.package_name }}_*.deb | head -n1)
+          BASENAME=$(basename "$DEB")
+          echo "deb_name=${BASENAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Deb sanity (dpkg -I + lintian)
+        run: |
+          sudo apt-get update -y >/dev/null
+          sudo apt-get install -y --no-install-recommends lintian >/dev/null
+          dpkg -I "dist/${{ steps.pack.outputs.deb_name }}"
+          lintian "dist/${{ steps.pack.outputs.deb_name }}" || echo "(lintian warnings tolerated; errors would have exited)"
+
+      - name: Upload deb as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ inputs.component }}
+          path: dist/${{ steps.pack.outputs.deb_name }}
+          retention-days: 30

@@ -1,0 +1,36 @@
+name: advisory-monitor
+# Per §7 detection model. Polls advisory_sources of each component descriptor
+# and opens one Issue per CVE×component. Cursor state is committed back to
+# main so the next run only opens NEW Issues.
+on:
+  schedule:
+    - cron: '0 * * * *'   # hourly; detection SLO 1-4h
+  workflow_dispatch:
+
+permissions:
+  contents: write   # cursor commit
+  issues:   write
+  pull-requests: read
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Ensure later push uses the workflow token.
+          persist-credentials: true
+
+      - name: Poll advisory sources for all descriptors
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/advisory-monitor.sh
+
+      # AI triage stays a TODO until a real endpoint exists; commented for the
+      # test repo so first runs don't try to hit a missing endpoint.
+      # - name: AI first-pass triage
+      #   env:
+      #     AI_TRIAGE_ENDPOINT: ${{ secrets.AI_TRIAGE_ENDPOINT }}
+      #     AI_TRIAGE_TOKEN:    ${{ secrets.AI_TRIAGE_TOKEN }}
+      #   run: ./scripts/ai-triage.sh --open-issues-only

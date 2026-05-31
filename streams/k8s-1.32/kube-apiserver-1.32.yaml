@@ -1,0 +1,28 @@
+# Stream = one component version line for one k8s bundle (§5 glossary).
+# Status drives the lifecycle: candidate → ga → maintenance → extended → eol-announced → eol.
+component: kube-apiserver
+bundle: k8s-1.32
+stream_id: kube-apiserver-1.32-lts.k8s-1.32
+source_branch: lts/k8s-1.32/kubernetes-1.32
+upstream:
+  tag: v1.32.13
+  released: "2026-05-13"   # TODO confirm against upstream release notes
+lts_build: 1
+canonical:
+  upstream: 1.32.13
+  lts: 1
+  bundle: k8s-1.32
+rendered:
+  oci_canonical: "1.32.13"
+  oci_human: "1.32.13-lts1"
+  # Image digest is filled in on first GA build by the publish step.
+  oci_digest: null
+status: candidate
+support_horizon:
+  ga_target: "2026-06-15"
+  maintenance_until: "2027-06-15"
+  extended_until: "2028-05-31"   # 24-month horizon per §1
+  eol: "2028-05-31"
+owner:
+  primary: eng-2
+  secondary: lead

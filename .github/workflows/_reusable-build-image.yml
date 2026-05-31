@@ -1,0 +1,130 @@
+name: _reusable-build-image
+# Hermetic-ish build of one k8s-core Go binary -> OCI image candidate.
+# Candidates go to ghcr.io/<owner>/lts-k8s/<component>:candidate-<run_id>;
+# canonical/human tags (1.32.13 + 1.32.13-lts<n>) are repointed in the GA
+# promote job (component-*.yml::promote) only after the policy gate is green.
+#
+# Test repo simplifications vs. the plan (§6):
+#   * Uses ubuntu-latest GHA runners, not the frozen self-hosted pool.
+#   * Builds inside the upstream golang toolchain image (pinned by digest)
+#     with --network=none; modules come from k8s's vendored tree.
+#   * No external module proxy required because kubernetes/kubernetes vendors
+#     its dependencies.
+on:
+  workflow_call:
+    inputs:
+      component:        { type: string, required: true }
+      upstream_tag:     { type: string, required: true }
+      lts_build:        { type: string, required: true }
+      bundle:           { type: string, required: true }
+      fork_repo:        { type: string, required: true }
+      lts_branch:       { type: string, required: true }
+      toolchain_image:  { type: string, required: true }
+      base_image:       { type: string, required: true }
+      entrypoint:       { type: string, required: true }
+      registry_path:    { type: string, required: true }
+    outputs:
+      image_ref:
+        description: 'Fully-qualified candidate ref incl. digest'
+        value: ${{ jobs.build.outputs.image_ref }}
+      image_digest:
+        value: ${{ jobs.build.outputs.image_digest }}
+      candidate_tag:
+        value: ${{ jobs.build.outputs.candidate_tag }}
+      canonical_tag:
+        value: ${{ jobs.build.outputs.canonical_tag }}
+      human_tag:
+        value: ${{ jobs.build.outputs.human_tag }}
+
+permissions:
+  contents: read
+  packages: write   # push to ghcr.io
+  id-token: write   # cosign keyless signing in downstream job
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image_ref:     ${{ steps.publish-candidate.outputs.image_ref }}
+      image_digest:  ${{ steps.publish-candidate.outputs.digest }}
+      candidate_tag: ${{ steps.tags.outputs.candidate }}
+      canonical_tag: ${{ steps.tags.outputs.canonical }}
+      human_tag:     ${{ steps.tags.outputs.human }}
+    steps:
+      - name: Checkout control repo
+        uses: actions/checkout@v4
+
+      - name: Checkout LTS branch from source fork
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.fork_repo }}
+          ref: ${{ inputs.lts_branch }}
+          path: src
+          fetch-depth: 1
+
+      - name: Render OCI tags
+        id: tags
+        run: |
+          ./scripts/render-oci-tags.sh \
+            "${{ inputs.upstream_tag }}" "${{ inputs.lts_build }}" >> "$GITHUB_OUTPUT"
+          echo "candidate=candidate-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Free disk space on runner
+        # k8s vendor tree + Go build cache + image push easily blows past the
+        # default ~14GB ubuntu-latest budget. Reclaim the obvious wins first.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                       /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Pull pinned toolchain image
+        run: docker pull "${{ inputs.toolchain_image }}"
+
+      - name: Hermetic build (network=none; vendored deps)
+        run: |
+          # kubernetes/kubernetes vendors deps under ./vendor, so no module
+          # download is needed; --network=none enforces that.
+          docker run --rm --network=none \
+            -v "${PWD}/src:/src" -w /src \
+            -e GOFLAGS="-mod=readonly -trimpath" \
+            -e GOSUMDB=off \
+            -e CGO_ENABLED=0 \
+            "${{ inputs.toolchain_image }}" \
+            bash -lc '${{ inputs.entrypoint }}'
+          ls -la src/_output/local/bin/linux/amd64/
+
+      - name: Assemble candidate image
+        env:
+          BASE_IMAGE: ${{ inputs.base_image }}
+          COMPONENT: ${{ inputs.component }}
+        run: |
+          cat > src/Dockerfile.candidate <<EOF
+          FROM ${BASE_IMAGE}
+          COPY _output/local/bin/linux/amd64/${COMPONENT} /usr/local/bin/${COMPONENT}
+          USER 65532:65532
+          LABEL net.lts.component=${COMPONENT}
+          LABEL net.lts.upstream-tag=${{ inputs.upstream_tag }}
+          LABEL net.lts.build=${{ inputs.lts_build }}
+          LABEL net.lts.bundle=${{ inputs.bundle }}
+          LABEL net.lts.fork-branch=${{ inputs.lts_branch }}
+          LABEL org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          ENTRYPOINT ["/usr/local/bin/${COMPONENT}"]
+          EOF
+          docker build -t lts-candidate:${COMPONENT} -f src/Dockerfile.candidate src
+
+      - name: Log in to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Push candidate (candidate-* tag only; canonical/human tags repointed at GA)
+        id: publish-candidate
+        env:
+          REGISTRY_PATH: ${{ inputs.registry_path }}
+          CANDIDATE_TAG: ${{ steps.tags.outputs.candidate }}
+        run: |
+          docker tag lts-candidate:${{ inputs.component }} "${REGISTRY_PATH}:${CANDIDATE_TAG}"
+          docker push "${REGISTRY_PATH}:${CANDIDATE_TAG}"
+          DIGEST=$(docker buildx imagetools inspect "${REGISTRY_PATH}:${CANDIDATE_TAG}" --format '{{.Manifest.Digest}}')
+          REF="${REGISTRY_PATH}@${DIGEST}"
+          echo "digest=${DIGEST}"      >> "$GITHUB_OUTPUT"
+          echo "image_ref=${REF}"      >> "$GITHUB_OUTPUT"
+          echo "candidate published: ${REF}"

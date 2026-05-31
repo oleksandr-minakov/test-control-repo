@@ -1,0 +1,27 @@
+# Customer-facing k8s bundle. Bundle release tag rendered as k8s-1.32-lts.YYYY.MM
+# (+ .hotfix.N) per §5. This file pins the *streams* in the bundle; their
+# concrete digests/deb-versions live in streams/k8s-1.32/<component>-1.32.yaml
+# and get baked into a bundle-manifest.json at release time.
+bundle: k8s-1.32-lts
+kubernetes_baseline: v1.32.13
+status: candidate
+release_tag_pattern: "k8s-1.32-lts.{YYYY}.{MM}"
+hotfix_tag_pattern: "k8s-1.32-lts.{YYYY}.{MM}.hotfix.{N}"
+streams:
+  - kube-apiserver-1.32-lts.k8s-1.32
+  - kube-controller-manager-1.32-lts.k8s-1.32
+  - kube-scheduler-1.32-lts.k8s-1.32
+  - kube-proxy-1.32-lts.k8s-1.32
+  - kubelet-1.32-lts.k8s-1.32
+  - kubectl-1.32-lts.k8s-1.32
+# Components in this scope but not yet onboarded — listed so the dashboard can
+# show coverage gaps against the §3 "Kubernetes core" group.
+deferred_streams:
+  - etcd-3.5-lts.k8s-1.32         # phase 2
+  - pause-3.10-lts.k8s-1.32       # phase 2
+  - image-builder-lts.k8s-1.32    # phase 2
+support_horizon:
+  ga_target: "2026-06-15"
+  maintenance_until: "2027-06-15"
+  extended_until: "2028-05-31"
+  eol: "2028-05-31"

@@ -1,0 +1,56 @@
+name: kube-proxy
+family: k8s-core
+tier: tier-1
+upstream:
+  repo: https://github.com/kubernetes/kubernetes
+  tag: v1.32.13
+  subpath: cmd/kube-proxy
+fork:
+  repo: oleksandr-minakov/kubernetes
+  lts_branch: lts/k8s-1.32/kubernetes-1.32
+owner:
+  primary: eng-1
+  secondary: lead
+build:
+  method: go-image
+  toolchain_image: docker.io/library/golang:1.23.4-bookworm
+  entrypoint: make WHAT=cmd/kube-proxy KUBE_BUILD_PLATFORMS=linux/amd64
+  goflags: -mod=readonly -trimpath
+  # kube-proxy is shipped CGO_ENABLED=0; iptables/nft userspace tools live in
+  # the base image, not the Go binary.
+  cgo_enabled: "0"
+  module_proxy: ""
+distribution:
+  transports: [oci]
+  oci:
+    registry_path: ghcr.io/oleksandr-minakov/lts-k8s/kube-proxy
+    # kube-proxy needs iptables/nft/ipset at runtime. Use upstream's own
+    # distroless-iptables build-image which ships those userspace tools.
+    base_image: registry.k8s.io/build-image/distroless-iptables:v0.6.7
+    labels_prefix: net.lts
+advisory_sources:
+  - kind: github-advisory
+    url: https://github.com/kubernetes/kubernetes/security/advisories
+  - kind: vendor-page
+    url: https://kubernetes.io/docs/reference/issues-security/official-cve-feed/
+  - kind: mailing-list
+    url: https://groups.google.com/g/kubernetes-security-announce
+  - kind: kev
+    url: https://www.cisa.gov/known-exploited-vulnerabilities-catalog
+tests:
+  bucket: B
+  upstream_targets:
+    - make test WHAT=./cmd/kube-proxy/... GOFLAGS=-mod=readonly
+    - make test WHAT=./pkg/proxy/... GOFLAGS=-mod=readonly
+  lts_extras:
+    - 'kind-cluster-smoke — ClusterIP routing on a 2-node kind cluster (iptables mode)'
+  skipped:
+    - test-e2e --ginkgo.focus=Networking (bucket B/C, requires privileged runners / lab)
+vex_default: needs_review
+license:
+  spdx: Apache-2.0
+  trademark: needs-review
+notes: |
+  Per §9, kube-proxy's node/network e2e suites are bucket B (privileged runners).
+  Phase-1 covers unit + a kind-mode smoke; deeper e2e gated on surge Ops standing
+  up larger runners.

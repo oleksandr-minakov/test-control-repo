@@ -1,0 +1,51 @@
+name: kube-controller-manager
+family: k8s-core
+tier: tier-1
+upstream:
+  repo: https://github.com/kubernetes/kubernetes
+  tag: v1.32.13
+  subpath: cmd/kube-controller-manager
+fork:
+  repo: oleksandr-minakov/kubernetes
+  lts_branch: lts/k8s-1.32/kubernetes-1.32
+owner:
+  primary: eng-2
+  secondary: lead
+build:
+  method: go-image
+  toolchain_image: docker.io/library/golang:1.23.4-bookworm
+  entrypoint: make WHAT=cmd/kube-controller-manager KUBE_BUILD_PLATFORMS=linux/amd64
+  goflags: -mod=readonly -trimpath
+  cgo_enabled: "0"
+  module_proxy: ""
+distribution:
+  transports: [oci]
+  oci:
+    registry_path: ghcr.io/oleksandr-minakov/lts-k8s/kube-controller-manager
+    base_image: gcr.io/distroless/static-debian12:nonroot
+    labels_prefix: net.lts
+advisory_sources:
+  - kind: github-advisory
+    url: https://github.com/kubernetes/kubernetes/security/advisories
+  - kind: vendor-page
+    url: https://kubernetes.io/docs/reference/issues-security/official-cve-feed/
+  - kind: mailing-list
+    url: https://groups.google.com/g/kubernetes-security-announce
+  - kind: kev
+    url: https://www.cisa.gov/known-exploited-vulnerabilities-catalog
+tests:
+  bucket: A
+  upstream_targets:
+    - make test WHAT=./cmd/kube-controller-manager/... GOFLAGS=-mod=readonly
+    - make test WHAT=./pkg/controller/... GOFLAGS=-mod=readonly
+  lts_extras:
+    - 'kind-cluster-smoke — controller-manager leader election + node controller reconcile'
+  skipped:
+    - test-integration WHAT=./test/integration/controllermanager/... (bucket B if covered later)
+vex_default: needs_review
+license:
+  spdx: Apache-2.0
+  trademark: needs-review
+notes: |
+  Built from the same lts/k8s-1.32/kubernetes-1.32 branch as the other k8s-core
+  components. Patch manifest lists per-binary applicability.

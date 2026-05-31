@@ -1,0 +1,4 @@
+# Components surfaced by Syft without a CPE/PURL that we knowingly waive.
+# Each entry is reviewed annually. Empty = no waivers granted.
+# Adding to this list requires Lead approval (see CODEOWNERS).
+waived: []

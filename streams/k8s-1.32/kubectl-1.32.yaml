@@ -1,0 +1,20 @@
+component: kubectl
+bundle: k8s-1.32
+stream_id: kubectl-1.32-lts.k8s-1.32
+source_branch: lts/k8s-1.32/kubernetes-1.32
+upstream:
+  tag: v1.32.13
+  released: "2026-05-13"
+lts_build: 1
+canonical: { upstream: 1.32.13, lts: 1, bundle: k8s-1.32 }
+rendered:
+  deb_version: "1.32.13-1~lts1"
+  deb_suite: "k8s-1.32-lts"
+  deb_component: "main"
+status: candidate
+support_horizon:
+  ga_target: "2026-06-15"
+  maintenance_until: "2027-06-15"
+  extended_until: "2028-05-31"
+  eol: "2028-05-31"
+owner: { primary: eng-2, secondary: lead }

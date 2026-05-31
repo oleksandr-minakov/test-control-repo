@@ -1,0 +1,134 @@
+name: kube-scheduler
+on:
+  workflow_dispatch:
+    inputs:
+      lts_build: { type: string, required: true, default: "1" }
+  pull_request:
+    paths:
+      - components/kube-scheduler.yaml
+      - .github/workflows/component-kube-scheduler.yml
+      - .github/workflows/_reusable-*.yml
+      - policy/**
+      - scripts/**
+  schedule:
+    - cron: '30 4 * * 1'
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  load-descriptor:
+    runs-on: ubuntu-latest
+    outputs:
+      upstream_tag:    ${{ steps.d.outputs.upstream_tag }}
+      bundle:          ${{ steps.d.outputs.bundle }}
+      fork_repo:       ${{ steps.d.outputs.fork_repo }}
+      lts_branch:      ${{ steps.d.outputs.lts_branch }}
+      toolchain_image: ${{ steps.d.outputs.toolchain_image }}
+      base_image:      ${{ steps.d.outputs.base_image }}
+      entrypoint:      ${{ steps.d.outputs.entrypoint }}
+      registry_path:   ${{ steps.d.outputs.registry_path }}
+      tier:            ${{ steps.d.outputs.tier }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: d
+        run: ./scripts/load-descriptor.sh components/kube-scheduler.yaml >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: load-descriptor
+    uses: ./.github/workflows/_reusable-build-image.yml
+    with:
+      component:       kube-scheduler
+      upstream_tag:    ${{ needs.load-descriptor.outputs.upstream_tag }}
+      lts_build:       ${{ inputs.lts_build || '1' }}
+      bundle:          ${{ needs.load-descriptor.outputs.bundle }}
+      fork_repo:       ${{ needs.load-descriptor.outputs.fork_repo }}
+      lts_branch:      ${{ needs.load-descriptor.outputs.lts_branch }}
+      toolchain_image: ${{ needs.load-descriptor.outputs.toolchain_image }}
+      base_image:      ${{ needs.load-descriptor.outputs.base_image }}
+      entrypoint:      ${{ needs.load-descriptor.outputs.entrypoint }}
+      registry_path:   ${{ needs.load-descriptor.outputs.registry_path }}
+    secrets: inherit
+
+  sbom:
+    needs: [load-descriptor, build]
+    uses: ./.github/workflows/_reusable-sbom.yml
+    with:
+      target_kind:  image
+      target_ref:   ${{ needs.build.outputs.image_ref }}
+      component:    kube-scheduler
+      upstream_tag: ${{ needs.load-descriptor.outputs.upstream_tag }}
+    secrets: inherit
+
+  scan:
+    needs: [load-descriptor, build, sbom]
+    uses: ./.github/workflows/_reusable-scan.yml
+    with:
+      target_kind: image
+      target_ref:  ${{ needs.build.outputs.image_ref }}
+      component:   kube-scheduler
+    secrets: inherit
+
+  evidence:
+    needs: [load-descriptor, build, sbom, scan]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: sbom-kube-scheduler, path: sbom/ }
+      - uses: actions/download-artifact@v4
+        with: { name: findings-kube-scheduler, path: scans/ }
+      - name: Render patch manifest + release metadata
+        env:
+          UPSTREAM_TAG: ${{ needs.load-descriptor.outputs.upstream_tag }}
+          LTS_BUILD:    ${{ inputs.lts_build || '1' }}
+          BUNDLE:       ${{ needs.load-descriptor.outputs.bundle }}
+          TIER:         ${{ needs.load-descriptor.outputs.tier }}
+          TARGET_KIND:  image
+          TARGET_REF:   ${{ needs.build.outputs.image_ref }}
+        run: |
+          mkdir -p evidence
+          ./scripts/render-patch-manifest.sh kube-scheduler \
+            "${UPSTREAM_TAG}" "${LTS_BUILD}" "${TARGET_REF}" \
+            > evidence/patch-manifest.yaml
+          ./scripts/render-release-metadata.sh kube-scheduler evidence/ scans/findings-kube-scheduler.json sbom/sbom-kube-scheduler.cdx.json
+      - uses: actions/upload-artifact@v4
+        with: { name: evidence-kube-scheduler, path: evidence/, retention-days: 90 }
+
+  sign:
+    needs: [load-descriptor, build, sbom, evidence]
+    uses: ./.github/workflows/_reusable-sign.yml
+    with:
+      target_kind: image
+      target_ref:  ${{ needs.build.outputs.image_ref }}
+      component:   kube-scheduler
+    secrets: inherit
+
+  gate:
+    needs: [load-descriptor, sign]
+    uses: ./.github/workflows/_reusable-policy-gate.yml
+    with:
+      component: kube-scheduler
+      tier:      ${{ needs.load-descriptor.outputs.tier }}
+    secrets: inherit
+
+  promote:
+    needs: [load-descriptor, build, gate]
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Repoint canonical + human tags at GA digest
+        env:
+          REGISTRY_PATH: ${{ needs.load-descriptor.outputs.registry_path }}
+          DIGEST:        ${{ needs.build.outputs.image_digest }}
+          CANONICAL:     ${{ needs.build.outputs.canonical_tag }}
+          HUMAN:         ${{ needs.build.outputs.human_tag }}
+        run: |
+          curl -sSfL https://github.com/google/go-containerregistry/releases/download/v0.20.2/go-containerregistry_Linux_x86_64.tar.gz \
+            | tar -xz -C /usr/local/bin crane
+          crane auth login ghcr.io -u ${{ github.actor }} -p "${{ secrets.GITHUB_TOKEN }}"
+          crane tag "${REGISTRY_PATH}@${DIGEST}" "${CANONICAL}"
+          crane tag "${REGISTRY_PATH}@${DIGEST}" "${HUMAN}"

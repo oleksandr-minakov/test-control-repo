@@ -1,0 +1,33 @@
+# Path-scoped ownership for the unified control repo.
+# Two-person review on Tier 1 non-clean backports is enforced by branch
+# protection in addition to these owners (§2).
+
+# Default
+*                                       @lts-lead
+
+# Descriptors + workflows by family
+/components/kube-apiserver.yaml          @lts-eng2 @lts-lead
+/components/kube-controller-manager.yaml @lts-eng2 @lts-lead
+/components/kube-scheduler.yaml          @lts-eng2 @lts-lead
+/components/kube-proxy.yaml              @lts-eng1 @lts-lead
+/components/kubelet.yaml                 @lts-eng1 @lts-lead
+/components/kubectl.yaml                 @lts-eng2 @lts-lead
+
+/.github/workflows/component-kube-apiserver.yml          @lts-eng2 @lts-lead
+/.github/workflows/component-kube-controller-manager.yml @lts-eng2 @lts-lead
+/.github/workflows/component-kube-scheduler.yml          @lts-eng2 @lts-lead
+/.github/workflows/component-kube-proxy.yml              @lts-eng1 @lts-lead
+/.github/workflows/component-kubelet.yml                 @lts-eng1 @lts-lead
+/.github/workflows/component-kubectl.yml                 @lts-eng2 @lts-lead
+
+# Shared infra
+/.github/workflows/_reusable-*.yml       @lts-eng1 @lts-eng2 @lts-lead
+/policy/                                 @lts-eng2 @lts-lead
+/toolchains/                             @lts-ops @lts-eng1 @lts-lead
+
+# Release gate
+/bundles/                                @lts-lead
+/streams/                                @lts-eng2 @lts-lead
+
+# Waivers require Lead sign-off (§8)
+/policy/cpe-waivers.yaml                 @lts-lead

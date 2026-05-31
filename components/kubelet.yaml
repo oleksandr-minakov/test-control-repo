@@ -1,0 +1,60 @@
+name: kubelet
+family: k8s-core
+tier: tier-1
+upstream:
+  repo: https://github.com/kubernetes/kubernetes
+  tag: v1.32.13
+  subpath: cmd/kubelet
+fork:
+  repo: oleksandr-minakov/kubernetes
+  lts_branch: lts/k8s-1.32/kubernetes-1.32
+owner:
+  primary: eng-1
+  secondary: lead
+build:
+  method: deb-package
+  toolchain_image: docker.io/library/golang:1.23.4-bookworm
+  # Binary produced in the Go toolchain container; .deb assembled on the
+  # runner with nfpm (installed inline in _reusable-build-deb.yml).
+  entrypoint: make WHAT=cmd/kubelet KUBE_BUILD_PLATFORMS=linux/amd64 KUBE_STATIC_OVERRIDES="kubelet"
+  goflags: -mod=readonly -trimpath
+  cgo_enabled: "0"
+  module_proxy: ""
+distribution:
+  transports: [deb]
+  deb:
+    package_name: kubelet
+    section: admin
+    priority: optional
+    architectures: [amd64]
+    # TODO(infra-setup.md#deb-maintainer): real org-published address required before GA.
+    maintainer: LTS Team <lts@example.com>
+advisory_sources:
+  - kind: github-advisory
+    url: https://github.com/kubernetes/kubernetes/security/advisories
+  - kind: vendor-page
+    url: https://kubernetes.io/docs/reference/issues-security/official-cve-feed/
+  - kind: mailing-list
+    url: https://groups.google.com/g/kubernetes-security-announce
+  - kind: kev
+    url: https://www.cisa.gov/known-exploited-vulnerabilities-catalog
+tests:
+  bucket: B
+  upstream_targets:
+    - make test WHAT=./cmd/kubelet/... GOFLAGS=-mod=readonly
+    - make test WHAT=./pkg/kubelet/... GOFLAGS=-mod=readonly
+  lts_extras:
+    - 'deb-package-sanity — dpkg -I metadata + lintian (warnings tolerated, errors fail)'
+    - 'deb-install-smoke — install on Ubuntu 22.04/24.04 container, verify systemd unit exists, kubelet --version matches'
+    - 'kind-node-smoke — kubelet starts, registers, runs a static pod'
+  skipped:
+    - test-e2e-node (bucket B — privileged runners + kernel control, schedule for Phase 2)
+vex_default: needs_review
+license:
+  spdx: Apache-2.0
+  trademark: needs-review
+notes: |
+  Kubelet ships as a deb (pkgs.k8s.io upstream model). The systemd unit, kubelet
+  drop-in, and conffile policy match upstream pkgs.k8s.io packaging for drop-in
+  replacement. Conffiles list must be kept in sync with upstream — see
+  toolchains/deb-build.Dockerfile and the nfpm config emitted by scripts/render-deb-version.sh.

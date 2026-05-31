@@ -1,0 +1,16 @@
+# Build outputs
+dist/
+sbom/
+scans/
+evidence/
+bundle-manifest.json
+bundles/releases/
+
+# Local state
+patch-manifests/state/cve-cursor.json
+
+# Editor noise
+.idea/
+.vscode/
+*.swp
+.DS_Store

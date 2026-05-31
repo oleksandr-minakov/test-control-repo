@@ -1,0 +1,54 @@
+name: kubectl
+family: k8s-core
+tier: tier-1
+upstream:
+  repo: https://github.com/kubernetes/kubernetes
+  tag: v1.32.13
+  subpath: cmd/kubectl
+fork:
+  repo: oleksandr-minakov/kubernetes
+  lts_branch: lts/k8s-1.32/kubernetes-1.32
+owner:
+  primary: eng-2
+  secondary: lead
+build:
+  method: deb-package
+  toolchain_image: docker.io/library/golang:1.23.4-bookworm
+  entrypoint: make WHAT=cmd/kubectl KUBE_BUILD_PLATFORMS=linux/amd64
+  goflags: -mod=readonly -trimpath
+  cgo_enabled: "0"
+  module_proxy: ""
+distribution:
+  transports: [deb]
+  deb:
+    package_name: kubectl
+    section: admin
+    priority: optional
+    architectures: [amd64]
+    maintainer: LTS Team <lts@example.com>
+advisory_sources:
+  - kind: github-advisory
+    url: https://github.com/kubernetes/kubernetes/security/advisories
+  - kind: vendor-page
+    url: https://kubernetes.io/docs/reference/issues-security/official-cve-feed/
+  - kind: mailing-list
+    url: https://groups.google.com/g/kubernetes-security-announce
+  - kind: kev
+    url: https://www.cisa.gov/known-exploited-vulnerabilities-catalog
+tests:
+  bucket: A
+  upstream_targets:
+    - make test WHAT=./cmd/kubectl/... GOFLAGS=-mod=readonly
+    - make test WHAT=./staging/src/k8s.io/kubectl/... GOFLAGS=-mod=readonly
+  lts_extras:
+    - 'deb-package-sanity — dpkg -I metadata + lintian'
+    - 'bash-completion-smoke — kubectl completion bash parses under bash 5.x'
+    - 'kind-client-smoke — kubectl version + kubectl get nodes against a kind cluster'
+vex_default: needs_review
+license:
+  spdx: Apache-2.0
+  trademark: needs-review
+notes: |
+  Client-side binary; bucket A throughout. Patch applicability against kubectl
+  alone is common (e.g. CVEs in apimachinery-client paths) — encode per-binary
+  decisions in the patch manifest, not at the branch level.
