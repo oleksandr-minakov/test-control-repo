@@ -30,9 +30,11 @@ jobs:
           path: evidence/
 
       - name: Run policy bundle
+        # Policies read input.tier directly from release-metadata.json; no
+        # --data flag needed (and `--data tier=...` was being misparsed as a
+        # filesystem path).
         run: |
           conftest test \
             --policy policy \
             --namespace lts.release \
-            --data tier="${{ inputs.tier }}" \
             evidence/release-metadata.json
