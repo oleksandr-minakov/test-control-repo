@@ -62,7 +62,7 @@ jobs:
         run: |
           docker run --rm --network=none \
             -v "${PWD}/src:/src" -w /src \
-            -e GOFLAGS="-mod=vendor -trimpath" \
+            -e GOFLAGS="-mod=vendor -trimpath -buildvcs=false" \
             -e GOSUMDB=off \
             -e GOPROXY=off \
             -e CGO_ENABLED=0 \
