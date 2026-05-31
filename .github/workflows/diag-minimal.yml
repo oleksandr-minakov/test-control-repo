@@ -1,0 +1,11 @@
+name: diag-minimal
+on: { workflow_dispatch: {} }
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+jobs:
+  hello:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "hello from a minimal workflow"

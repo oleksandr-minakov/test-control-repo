@@ -1,0 +1,15 @@
+name: diag-reusable-call
+on: { workflow_dispatch: {} }
+permissions:
+  contents: read
+  packages: read
+  id-token: write
+jobs:
+  call-sbom:
+    uses: ./.github/workflows/_reusable-sbom.yml
+    with:
+      target_kind: image
+      target_ref: ghcr.io/oleksandr-minakov/lts-k8s/kubectl:dummy
+      component: diag
+      upstream_tag: v1.32.13
+    secrets: inherit
