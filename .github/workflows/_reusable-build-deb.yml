@@ -89,15 +89,18 @@ jobs:
             --bundle "${{ inputs.bundle }}" \
             > nfpm.yaml
 
-      - name: Pack .deb
-        id: pack
+      - name: Stage kubelet packaging files
+        if: inputs.component == 'kubelet'
+        # Pre-baked packaging files for the kubelet deb. Production would track
+        # upstream's pkgs.k8s.io packaging directly.
         run: |
-          mkdir -p dist src/packaging
-          # Drop the kubelet systemd unit drop-in so the conffile reference
-          # resolves on first build. Real production would track upstream's
-          # pkgs.k8s.io packaging directly.
-          if [ "${{ inputs.component }}" = "kubelet" ]; then
-            cat > src/packaging/kubelet.service <<'EOF'
+          set -ex
+          # The src/_output/ tree was written by Docker as root; reclaim the
+          # whole src tree as the runner user so we can create sibling dirs.
+          sudo chown -R "$USER":"$USER" src || true
+          mkdir -p src/packaging
+
+          cat > src/packaging/kubelet.service <<'UNIT'
           [Unit]
           Description=kubelet: The Kubernetes Node Agent (LTS rebuild)
           Documentation=https://kubernetes.io/docs/
@@ -112,20 +115,34 @@ jobs:
 
           [Install]
           WantedBy=multi-user.target
-          EOF
-            cat > src/packaging/10-kubeadm.conf <<'EOF'
+          UNIT
+
+          cat > src/packaging/10-kubeadm.conf <<'KCONF'
           [Service]
           Environment="KUBELET_KUBECONFIG_ARGS=--bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/kubelet.conf"
           Environment="KUBELET_CONFIG_ARGS=--config=/var/lib/kubelet/config.yaml"
           EnvironmentFile=-/var/lib/kubelet/kubeadm-flags.env
           EnvironmentFile=-/etc/default/kubelet
           ExecStart=
-          ExecStart=/usr/bin/kubelet \$KUBELET_KUBECONFIG_ARGS \$KUBELET_CONFIG_ARGS \$KUBELET_KUBEADM_ARGS \$KUBELET_EXTRA_ARGS
-          EOF
-            printf '#!/bin/sh\nset -e\nsystemctl daemon-reload || true\n' > src/packaging/kubelet.postinst
-            printf '#!/bin/sh\nset -e\nsystemctl stop kubelet || true\n'   > src/packaging/kubelet.prerm
-            chmod +x src/packaging/kubelet.postinst src/packaging/kubelet.prerm
-          fi
+          ExecStart=/usr/bin/kubelet $KUBELET_KUBECONFIG_ARGS $KUBELET_CONFIG_ARGS $KUBELET_KUBEADM_ARGS $KUBELET_EXTRA_ARGS
+          KCONF
+
+          # Strip the leading 10-space indent that comes from the YAML pipe-literal.
+          # (cat <<'TERM' preserves indentation; systemd parsing is whitespace-sensitive.)
+          sed -i 's/^          //' src/packaging/kubelet.service src/packaging/10-kubeadm.conf
+
+          printf '#!/bin/sh\nset -e\nsystemctl daemon-reload || true\n' > src/packaging/kubelet.postinst
+          printf '#!/bin/sh\nset -e\nsystemctl stop kubelet || true\n'   > src/packaging/kubelet.prerm
+          chmod +x src/packaging/kubelet.postinst src/packaging/kubelet.prerm
+
+          ls -la src/packaging/
+
+      - name: Pack .deb
+        id: pack
+        run: |
+          set -ex
+          sudo chown -R "$USER":"$USER" src || true
+          mkdir -p dist
           nfpm package -f nfpm.yaml -p deb -t dist/
           DEB=$(ls dist/${{ inputs.package_name }}_*.deb | head -n1)
           BASENAME=$(basename "$DEB")
